@@ -21,7 +21,7 @@ There is no code yet, so no checks are configured. The change that adds the firs
 
 ## Personal data
 
-Transcripts and memory files contain personal data. Never commit them or write their contents to logs. Use synthetic transcripts and memory files in tests, fixtures, and docs.
+Transcripts and memory files contain personal data. Never commit them or write their contents to logs. Use synthetic transcripts and memory files in tests, fixtures, and docs. The one exception is the cleaned sessions in [`examples/transcripts/`](examples/transcripts/README.md). Before adding a session there, clean and review it as its README describes.
 
 ## Code comments
 

@@ -37,7 +37,7 @@ The first feature spec decides whether the lead writes the workflow at run time,
 
 ## Privacy
 
-Transcripts and memory files hold personal data. Keep them outside this repository, and use synthetic examples in tests and docs. Each analyzer sends a whole transcript to the Anthropic API, so only feed in what you're willing to send there.
+Transcripts and memory files hold personal data. Keep them outside this repository, and use synthetic examples in tests and docs. The exception is a few real sessions with personal details replaced, kept in [examples/transcripts](examples/transcripts/README.md) for development. Each analyzer sends a whole transcript to the Anthropic API, so only feed in what you're willing to send there.
 
 Two rules carry over from the cookbook's prompts:
 
