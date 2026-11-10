@@ -10,11 +10,11 @@ A dream is a background pass over finished transcripts. It reads them with hinds
 
 The cookbook runs on Claude Managed Agents with three agents:
 
-| Agent | Model in the cookbook | Job |
-| --- | --- | --- |
-| Lead (`memory-distiller`) | Claude Sonnet 5.5 | Writes a workflow script from the request, starts one run, and reports counts. It never reads transcripts or edits memory. |
-| Analyzer (`transcript-analyzer`) | Claude Haiku 5.5 | Reads one transcript in full, checks existing memory against it, and adds durable, verified facts. Analyzers run in parallel, in groups of about 20. |
-| Organizer (`memory-organizer`) | Claude Haiku 5.5 | Runs once after all analyzers. Merges duplicates, fixes links and frontmatter, and completes the index without dropping any fact. |
+| Agent                            | Model in the cookbook | Job                                                                                                                                                  |
+| -------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lead (`memory-distiller`)        | Claude Sonnet 5.5     | Writes a workflow script from the request, starts one run, and reports counts. It never reads transcripts or edits memory.                           |
+| Analyzer (`transcript-analyzer`) | Claude Haiku 5.5      | Reads one transcript in full, checks existing memory against it, and adds durable, verified facts. Analyzers run in parallel, in groups of about 20. |
+| Organizer (`memory-organizer`)   | Claude Haiku 5.5      | Runs once after all analyzers. Merges duplicates, fixes links and frontmatter, and completes the index without dropping any fact.                    |
 
 Memory is a directory of small Markdown files:
 
@@ -33,7 +33,9 @@ The cookbook relies on Managed Agents for the agent runtime, the memory store, t
 - Memory is a local directory in the format above.
 - The agents' file tools are Python functions. They read transcripts and can write only inside the memory directory.
 
-The first feature spec decides whether the lead writes the workflow at run time, as in the cookbook, or ADK's workflow agents run a fixed sequence of analyzers followed by the organizer.
+There is no lead agent. Every run follows the same sequence: analyzers in groups of at most 20, then the organizer. The [first feature spec](specs/001-dream-sessions/spec.md) explains why.
+
+Memory is organized by domain. The cookbook's index has `## <domain>` headings but no rule for choosing a domain. Here the agents file facts under broad areas of the user's work or life, such as development or business, and inside a domain under `### <subdomain>` headings, such as one per project. Domains come from what the sessions cover; there is no fixed list.
 
 ## Privacy
 
