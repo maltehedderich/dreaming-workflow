@@ -1,0 +1,40 @@
+min_version = "2026.11.3"
+
+[settings]
+lockfile = true
+python.uv_venv_auto = "source"
+
+[tools]
+python = "3.15"
+uv = "0.13.7"
+
+[env]
+UV_PYTHON_PREFERENCE = "only-system"
+
+[tasks.setup]
+description = "Install project dependencies from the lockfile"
+run = "uv sync --locked"
+
+[tasks.format]
+description = "Format code and apply safe lint fixes"
+run = "uv run ruff format . && uv run ruff check --fix ."
+
+[tasks.lint]
+description = "Run read-only lint and formatting checks"
+run = "uv run ruff check . && uv run ruff format --check ."
+
+[tasks.typecheck]
+description = "Type-check the source and tests"
+run = "uv run ty check src tests"
+
+[tasks.test]
+description = "Run the unit, contract, and integration tests"
+run = "uv run pytest"
+
+[tasks.check]
+description = "Run every check CI gates on"
+depends = ["lint", "typecheck", "test"]
+
+[tasks.eval]
+description = "Run the evals against the real Claude API (needs credentials, costs money)"
+run = "uv run pytest -m eval tests/eval"

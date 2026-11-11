@@ -5,7 +5,9 @@ The analyzer and the organizer act on memory only through these tools. They are 
 Each tool returns a JSON object:
 
 - success: `{"status": "ok", …}` with the fields listed below;
-- refusal: `{"status": "refused", "reason": "<message for the model>"}`. The connector marks the tool result as an error. Refusals are expected; the agent reads the reason and adapts.
+- refusal: `{"status": "refused", "reason": "<message for the model>", "is_error": true}`. ADK's Claude model marks a tool result with `is_error` set as an error. Refusals are expected; the agent reads the reason and adapts.
+
+No result has a field named `content`. When a result has a `content` string, ADK sends only that string to Claude and drops the other fields. Every other result reaches Claude as the whole object in JSON.
 
 Refusal messages go only to the model. Logs and the report never contain them.
 
@@ -29,7 +31,7 @@ No tool reads session files, runs commands, or touches anything outside the memo
 
 ## Reading
 
-### `read_index() → {content}`
+### `read_index() → {text}`
 
 Returns `_index.md`, or an empty string if there is none.
 
@@ -37,7 +39,7 @@ Returns `_index.md`, or an empty string if there is none.
 
 Case-insensitive literal search across memory files and stubs. Returns at most 50 matches; each excerpt is the matching line cut to 300 characters. Used to find existing facts without reading whole files.
 
-### `read_file(slug, start_line=1, max_lines=null) → {content, version, total_lines}`
+### `read_file(slug, start_line=1, max_lines=null) → {text, version, total_lines}`
 
 Returns the file (or the requested lines) and its version token. A stub returns its `MOVED TO [[slug]]` line. Lines let the organizer work through a file too large to read at once.
 

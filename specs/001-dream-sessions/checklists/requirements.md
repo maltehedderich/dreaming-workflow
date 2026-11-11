@@ -32,7 +32,7 @@
 ## Notes
 
 - Two clarifications were resolved with the user on 2026-11-10. First, runs follow a fixed sequence: analyses in groups of at most 20, then one organizer pass (FR-010). The user first chose a lead agent that writes each run's workflow, then switched after seeing that the lead would write nearly the same workflow every run. Second, the tool keeps a record of handled sessions and skips unchanged ones (FR-005).
-- The spec names Claude Code, Codex, their session locations, the JSONL format, the Claude API, `ANTHROPIC_API_KEY`, `ant auth login`, and the cookbook's models. These are the inputs, the external dependency, and the user-facing contract, not implementation choices. The spec leaves out ADK, Python, the Anthropic SDK, and the model connector, which belong in the plan.
+- The spec names Claude Code, Codex, their session locations, the JSONL format, the Claude API, `ANTHROPIC_API_KEY`, `ant auth login`, and the cookbook's models. These are the inputs, the external dependency, and the user-facing contract, not implementation choices. The spec leaves out ADK, Python, the Anthropic SDK, and how ADK reaches Claude, which belong in the plan.
 - The reader is a developer who uses Claude Code and Codex, so developer terms count as plain language for this audience.
 - SC-001, SC-002, SC-004, SC-006, and SC-012 depend on model output. They are measured over repeated runs and can't be checked by deterministic tests alone. The plan has to define how each is evaluated.
 - The example sessions don't cover compaction or multi-turn Codex sessions. The spec lists them as out of scope for testing.

@@ -198,12 +198,12 @@ The set is written to the record right after each analysis write. Files the orga
 | `connection-error` | Network failure after 3 retries |
 | `api-error` | Any other API status; detail holds the status code and request ID |
 | `authentication-failed` | 401 or 403; stops the run's remaining requests |
-| `refused` | `stop_reason: "refusal"` |
-| `max-tokens` | `stop_reason: "max_tokens"` |
+| `refused` | `stop_reason: "refusal"` (ADK's `finish_reason` `SAFETY`) |
+| `max-tokens` | `stop_reason: "max_tokens"` or `"model_context_window_exceeded"` (ADK's `finish_reason` `MAX_TOKENS`) |
 | `context-limit` | Next request would pass 95,000 input tokens |
 | `turn-limit` | ADK `max_llm_calls` reached |
 | `spending-limit-reached` | Spending limit reached before or during the analysis |
-| `invalid-model-output` | Response the connector can't map (for example `redacted_thinking`) |
+| `invalid-model-output` | Reply `ClaudeModel` rejects: `redacted_thinking`, or a finish reason other than stop, `MAX_TOKENS`, or `SAFETY` |
 | `internal-error` | Unexpected exception; detail holds the exception class name only |
 
 ### `AnalysisResult`
@@ -230,7 +230,7 @@ Shared by every request in a run.
 
 ### `ContextGuard`
 
-One per agent invocation: `last_prompt_tokens` (from the previous response's usage), `pending_estimate` (estimated tokens added since), `read_budget` 75,000, `ceiling` 95,000. Tools ask it before returning content; the connector asks it before sending.
+One per agent invocation: `last_prompt_tokens` (from the previous response's usage), `pending_estimate` (estimated tokens added since), `read_budget` 75,000, `ceiling` 95,000. Tools ask it before returning content; `ClaudeModel` asks it before sending.
 
 ### `RunOutcome` (enum)
 

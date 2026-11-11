@@ -13,7 +13,19 @@ This is a Python command-line tool with no frontend.
 
 ## Required checks
 
-There is no code yet, so no checks are configured. The change that adds the first code also adds `pyproject.toml`, `mise.toml`, the tasks above, and a CI workflow, and lists each task's commands and test layer in a table here.
+`mise.toml` defines these tasks. CI (`.github/workflows/check.yml`) runs `mise run setup` and `mise run check` on pushes to `main` and on pull requests.
+
+| Task | Command | Layer | In CI |
+| --- | --- | --- | --- |
+| `setup` | `uv sync --locked` | — | yes |
+| `format` | `uv run ruff format . && uv run ruff check --fix .` | — | no (writes files) |
+| `lint` | `uv run ruff check . && uv run ruff format --check .` | static | yes |
+| `typecheck` | `uv run ty check src tests` (strict rules set in `pyproject.toml`) | static | yes |
+| `test` | `uv run pytest` (unit, contract, integration; excludes `eval`) | unit, contract, integration | yes |
+| `check` | runs `lint`, `typecheck`, `test` | CI gate | yes |
+| `eval` | `uv run pytest -m eval tests/eval` | acceptance against the real API | no: needs credentials, costs money, varies between runs |
+
+Run `mise run eval` by hand before merging any change to prompts, agent tools, the model and agent settings (`agents/claude_model.py`, `agents/runner.py`), or the session parsers, and put its summary in the PR description.
 
 - For documentation-only changes, review affected text against the constitution, check local links, and verify that scope and acceptance behavior agree across documents. These checks are sufficient while runtime behavior is unchanged.
 - When adding tooling, document its exact required check commands here in the same change. Feature plans must identify the checks that apply and the layer each runs at.

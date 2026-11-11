@@ -1,6 +1,6 @@
 # Research: Dream over Claude Code and Codex sessions
 
-Decisions for the [plan](plan.md). Each entry gives the decision, why, and what was rejected. Library facts come from current docs: Google ADK through Context7 (`/websites/adk_dev`, `/websites/adk_dev_api-reference_python`), the Claude API reference bundled with Claude Code (cached 2026-11-03), PyPI metadata on 2026-11-10, and the source of the `anthropic` 2.8.0 wheel.
+Decisions for the [plan](plan.md). Each entry gives the decision, why, and what was rejected. Library facts come from current docs: Google ADK through Context7 (`/websites/adk_dev`, `/websites/adk_dev_api-reference_python`), the Claude API reference bundled with Claude Code (cached 2026-11-03), PyPI metadata on 2026-11-10, and the source of the `anthropic` 2.8.0 and `google-adk` 2.14.0 wheels.
 
 ## R1. Runtime and project tooling
 
@@ -18,41 +18,54 @@ Decisions for the [plan](plan.md). Each entry gives the decision, why, and what 
 
 **Alternatives considered**: ADK `ParallelAgent` or a 2.0 workflow graph for the groups. Both share one ADK session between branches and make per-session failure, retries, and spending checks harder to follow. A hand-written tool loop on the Anthropic SDK alone would drop ADK, which the README makes the point of this project.
 
-## R3. Model connector
+## R3. Calling Claude from ADK
 
-**Decision**: `AnthropicLlm`, a subclass of `google.adk.models.BaseLlm`, implements `generate_content_async(llm_request, stream=False)` with `anthropic.AsyncAnthropic.messages.create` (non-streaming). It yields exactly one `LlmResponse` with `partial=False`.
+**Decision**: ADK's own `google.adk.models.anthropic_llm.AnthropicLlm` calls the Claude API. It converts ADK's `google.genai` types into a Messages API request, sends it with `anthropic.AsyncAnthropic.messages.create` (non-streaming), and converts the reply back. A thin subclass, `ClaudeModel` in `agents/claude_model.py`, adds this tool's settings, one conversion fix, and failure mapping. It is the only code that touches ADK's model internals.
 
-Mapping, ADK → Messages API:
+What `AnthropicLlm` does, read from the `google-adk` 2.14.0 source:
 
 | ADK (`google.genai.types`) | Messages API |
 | --- | --- |
-| `config.system_instruction` | `system`, one text block with an explicit `cache_control` breakpoint |
-| `config.tools[].function_declarations[]` | `tools[]`: `name`, `description`, `input_schema` from `parameters_json_schema`, or converted from `parameters` (genai `Schema`, type names lowercased) |
-| `Content(role="user")` text part | user `text` block |
-| `Content(role="model")` text part | assistant `text` block |
-| `Part(thought=True, thought_signature=…)` | assistant `thinking` block, signature passed back unchanged, text kept even when empty |
+| `config.system_instruction` | `system`, one text block; with a cache config, it carries a `cache_control` breakpoint |
+| `config.tools[].function_declarations[]` | `tools[]` with `input_schema` from `parameters_json_schema`, type names lowercased; with a cache config, the last tool carries a breakpoint |
+| `Part(thought=True, text=…, thought_signature=…)` | assistant `thinking` block, signature unchanged |
+| `Part(thought=True, thought_signature=…)` without text | assistant `redacted_thinking` block with the signature as its data (fixed below) |
 | `Part(function_call=FunctionCall(id, name, args))` | assistant `tool_use` block with the same `id` |
-| `Part(function_response=FunctionResponse(id, name, response))` | user `tool_result` block, `is_error` when the tool returned `status: "refused"` |
+| `Part(function_response=FunctionResponse(id, name, response))` | user `tool_result`. Its content is the response's `content` string if it has one, otherwise the whole response as JSON with non-ASCII characters escaped. `is_error` is set when the response has `is_error` or `isError` |
+| end of the conversation | with a cache config, a breakpoint on the last block that isn't thinking |
 
-Responses map back the same way: `thinking` → thought part with the signature as bytes, `tool_use` → `FunctionCall` with the API's `id`, `text` → text part. `redacted_thinking` is not expected from Claude Haiku 5.5 with the default display; if one arrives, the connector raises and the part fails with `invalid-model-output` rather than dropping it silently.
+Replies map back: `thinking` → thought part with the signature as bytes and the text kept even when empty; `redacted_thinking` → thought part without text; `tool_use` → `FunctionCall` with the API's `id`; `text` → text part. Stop reasons become `finish_reason`: `end_turn`, `tool_use`, `stop_sequence`, and `pause_turn` → `STOP`; `max_tokens` and `model_context_window_exceeded` → `MAX_TOKENS`, and a reply cut off inside a tool call returns no calls; `refusal` → `SAFETY`.
 
-Request settings: `model="claude-haiku-5-5"`, `max_tokens=16000`, `thinking={"type": "adaptive"}`, `output_config={"effort": "medium"}`, top-level `cache_control={"type": "ephemeral"}` (automatic caching for the growing history), no sampling parameters. Client: `AsyncAnthropic(timeout=anthropic.Timeout(300.0, connect=10.0), max_retries=3)`.
+Settings, in three places:
 
-Stop reasons: `end_turn` and `tool_use` are normal. `max_tokens` fails the part with `max-tokens`. `refusal` fails it with `refused`; Claude Haiku 5.5 has no server-side fallback.
+- On the model: `model="claude-haiku-5-5"`, `max_tokens=16000`, and the client from `create_client()`, `AsyncAnthropic(timeout=anthropic.Timeout(300.0, connect=10.0), max_retries=3)`. ADK uses a client it is given as is.
+- On each agent: `generate_content_config=AnthropicGenerateContentConfig(effort="medium", thinking_config=ThinkingConfig(thinking_budget=-1))`. ADK sends `thinking={"type": "adaptive", "display": "summarized"}` and `output_config={"effort": "medium"}`, and no sampling parameters.
+- On each app: `context_cache_config=ContextCacheConfig()`, which turns on the three breakpoints above, each `{"type": "ephemeral"}`. ADK asks for Claude's 1-hour cache only when the TTL is at least an hour; the default is 30 minutes.
 
-**Rationale**: ADK's built-in `Claude` class talks to Claude through Vertex AI only, and its documented path to the direct Claude API is `LiteLlm`, which adds the `litellm` dependency and doesn't resolve `ant auth login` profiles. The official SDK resolves `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_PROFILE`, workload identity, and the active `ant auth login` profile in that order. Claude Haiku 5.5 thinks by default and needs thinking blocks passed back unchanged with tool results; ADK's API reference shows thought parts and signatures kept in history (`include_thoughts_from_other_agents`, and the LiteLLM connector rebuilds Anthropic thinking blocks from them since ADK 1.28). A contract test runs the real ADK `Runner` against a fake Messages API and asserts the second request carries the first response's thinking block and signature. If ADK ever stops keeping them, the connector can keep a map from `tool_use` id to the preceding thinking blocks and reinsert them.
+`run_agent()` in `agents/runner.py` builds every agent and app this way, so analyses, the organizer, and the contract test share the settings.
 
-Caching: the system prompt and tool definitions are identical for every analysis, so the explicit breakpoint lets parallel analyses share them, and automatic caching covers each loop's growing history. Claude Haiku 5.5 caches prefixes of 512 tokens or more; cache reads cost 0.1× the input rate and 5-minute writes 1.25×.
+`ClaudeModel` changes two things:
 
-Retries: the SDK retries 408, 409, 429, 5xx (529 is the overload response), timeouts, and connection errors with backoff, honoring `retry-after`. `max_retries=3` gives the spec's "up to 3 times" for rate limits, overloads, and timeouts. The other retried classes are a superset that costs nothing extra: a failed request isn't billed, and the Messages API has no side effects to duplicate.
+1. **Thinking blocks with empty text go back as thinking blocks.** Claude Haiku 5.5 omits thinking text unless the request asks for summaries, and the API needs every thinking block back unchanged with the tool results. ADK reads a thought part with empty text as redacted thinking and sends `{"type": "redacted_thinking", "data": <signature>}` in its place. `ClaudeModel` overrides ADK's private `_build_anthropic_kwargs`, the one method that sees the converted messages, and turns each such block back into `{"type": "thinking", "thinking": "", "signature": …}`. That is safe because `ClaudeModel` fails any reply that holds real redacted thinking, which Claude Haiku 5.5 doesn't send. Summarized display makes empty text rare; the override covers the rest.
+2. **Unusable replies fail the part.** `STOP` is normal. `MAX_TOKENS` raises `AgentFailure` with `max-tokens`. `SAFETY` raises `refused`; Claude Haiku 5.5 has no server-side fallback. Any other finish reason, or a thought part without text (redacted thinking), raises `invalid-model-output` rather than dropping the block silently.
 
-Credentials preflight: constructing `AsyncAnthropic()` runs the SDK's credential chain locally without a network call. If the client ends up with `api_key`, `auth_token`, and `credentials` all `None`, the run stops with "not started" and names `ANTHROPIC_API_KEY` and `ant auth login`. A `CredentialsError` at construction (a broken profile) stops the run the same way, with the error class in the message. An `AuthenticationError` or `PermissionDeniedError` during the run stops all further requests; remaining sessions fail with `authentication-failed`.
+The tools adapt to ADK's tool results ([agent tools contract](contracts/agent-tools.md)): refusals carry `is_error: true`, and no result has a `content` field, because ADK would send that string alone and drop the rest, such as `read_file`'s `version`.
 
-**Alternatives considered**: `LiteLlm` (extra dependency, no profile support). Streaming responses (not needed: 16,000 output tokens at Haiku speed fits the 300-second timeout, and the SDK only requires streaming for much larger `max_tokens`). Disabling thinking (`{"type": "disabled"}` is accepted at effort `high` or below, but Anthropic's migration notes recommend lowering effort instead, and the round trip is testable).
+**Rationale**: ADK 2.14 ships two classes on the `anthropic` SDK. `AnthropicLlm` calls the Claude API directly; its subclass `Claude` goes through Vertex AI. An earlier draft of this plan assumed ADK reached Claude only through Vertex AI and wrote its own `BaseLlm` subclass with its own conversion. `AnthropicLlm` makes that unnecessary: ADK maintains the conversion, including tool IDs, thinking signatures, cache breakpoints, and usage. Given our client, it keeps the SDK's credential chain: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_PROFILE`, workload identity, then the active `ant auth login` profile. Claude Haiku 5.5 thinks by default and needs thinking blocks passed back unchanged with tool results. ADK keeps thought parts and their signatures in session history; a contract test runs the real ADK `Runner` against a fake Messages API and asserts the second request carries the first reply's thinking block and signature, with text and with empty text.
+
+Caching: the system prompt and tool definitions are identical for every analysis, so their breakpoints let parallel analyses share them, and the breakpoint at the end of the conversation covers each loop's growing history. Claude Haiku 5.5 caches prefixes of 512 tokens or more; cache reads cost 0.1× the input rate and 5-minute writes 1.25×.
+
+Retries: the SDK retries 408, 409, 429, 5xx (529 is the overload response), timeouts, and connection errors with backoff, honoring `retry-after`. `max_retries=3` gives the spec's "up to 3 times" for rate limits, overloads, and timeouts. The other retried classes are a superset that costs nothing extra: a failed request isn't billed, and the Messages API has no side effects to duplicate. ADK re-raises the SDK's `RateLimitError` as a subclass with a longer message, so checks with `isinstance` still match.
+
+Credentials preflight: constructing `AsyncAnthropic()` runs the SDK's credential chain locally without a network call. If the client ends up with `api_key`, `auth_token`, and `credentials` all `None`, the run stops with "not started" and names `ANTHROPIC_API_KEY` and `ant auth login`. A `CredentialsError` at construction (a broken profile) stops the run the same way, with the error class in the message. An `AuthenticationError` or `PermissionDeniedError` during the run stops all further requests; remaining sessions fail with `authentication-failed`. ADK runs the same credential check only when it builds the client itself, so `create_client()` keeps its own.
+
+Accepted cost: ADK escapes non-ASCII characters in tool results (`ü` becomes `\u00fc`), so memory text in languages other than English costs a few more tokens than it would unescaped.
+
+**Alternatives considered**: Our own `BaseLlm` subclass with its own conversion (the earlier draft): more code to keep in step with ADK and the SDK, where ADK's class needs one fix. `LiteLlm` (adds the `litellm` dependency and doesn't resolve `ant auth login` profiles). Leaving `thinking` unset to get the model's default, omitted display (it would depend on a model default, and ADK has no way to request adaptive thinking with omitted display). Streaming responses (not needed: 16,000 output tokens at Haiku speed fits the 300-second timeout, and the SDK only requires streaming for much larger `max_tokens`). Disabling thinking (`{"type": "disabled"}` is accepted at effort `high` or below, but Anthropic's migration notes recommend lowering effort instead, and the round trip is testable).
 
 ## R4. Model, prices, and cost
 
-**Decision**: Claude Haiku 5.5 (`claude-haiku-5-5`) for analyses and the organizer, as the spec assumes. The connector computes each response's cost from its `usage`:
+**Decision**: Claude Haiku 5.5 (`claude-haiku-5-5`) for analyses and the organizer, as the spec assumes. `ClaudeModel` computes each response's cost from the usage ADK reports on the `LlmResponse`: `usage_metadata.prompt_token_count` (input, cache writes, and cache reads together), `usage_metadata.cached_content_token_count` (cache reads), `cache_creation_token_count` (cache writes), and output as `candidates_token_count` plus `thoughts_token_count`. In the API's terms:
 
 ```
 prompt   = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
@@ -81,7 +94,7 @@ Thinking tokens are billed as output and are included in `output_tokens`. Prices
 
 1. **Part size** (R5) bounds the session text in each request.
 2. **Read budget in the tools**: each agent invocation has a `ContextGuard` that knows the last request's real prompt size (from `usage`) plus the estimate of everything added since. `read_index`, `read_file`, and `search_memory` refuse a result that would take the projected prompt past 75,000 tokens and tell the agent how much room is left and to finish with what it has.
-3. **Hard ceiling in the connector**: before sending, the connector projects the prompt size the same way. Above 95,000 it doesn't send, and the part (or organizer pass) fails with `context-limit`.
+3. **Hard ceiling in `ClaudeModel`**: before sending, `ClaudeModel` projects the prompt size the same way. Above 95,000 it doesn't send, and the part (or organizer pass) fails with `context-limit`.
 
 The organizer receives waiting and format-violating files only up to 40,000 estimated tokens of content, violating files first, then waiting files oldest first, and always at least one file. Files beyond that keep waiting for the next run, and the report counts them (FR-018 allows this: a file stops waiting only when an organizer pass that received it succeeds).
 
@@ -195,7 +208,7 @@ The memory directory is created with mode 0700 if missing. Order at start: parse
 | Layer | What it uses | What it covers |
 | --- | --- | --- |
 | Unit | Pure functions, temporary directories | Parsers (on the six examples and synthetic files), view rendering, estimate, parts, selection rules, index parsing and edits, format check, path and credential guards, citation rules, cost math, record, backup retention |
-| Contract | Real `anthropic` SDK and real ADK `Runner`, fake Messages API through `httpx2.MockTransport` | Request shape, tool and thinking round trip, cache settings, usage and cost, retry count on 429/529/timeouts (with `retry-after-ms: 1` to keep it fast), refusal and `max_tokens`, the 95,000-token ceiling, credential preflight |
+| Contract | `ClaudeModel` on ADK's `AnthropicLlm`, the real `anthropic` SDK, and a real ADK `Runner`, fake Messages API through `httpx2.MockTransport` | Request shape, tool and thinking round trip (including empty thinking text), cache breakpoints, refused tool results marked as errors, usage and cost, retry count on 429/529/timeouts (with `retry-after-ms: 1` to keep it fast), refusal and `max_tokens`, the 95,000-token ceiling, credential preflight |
 | Integration | Full `dream` runs with a scripted `BaseLlm` test double, real ADK, real files | Report counts on the examples, groups and ordering, part order, failures and exit codes, spending limit, waiting files and organizer recovery, preview equals run, repeat run sends nothing, lock, backups, content-free output, writes outside memory refused, concurrent edits |
 | Eval | Real Claude API, `mise run eval`, run by hand | Model-dependent criteria: SC-001, SC-002, SC-003, SC-004, SC-006, SC-011, SC-012, the semantic acceptance scenarios, and SC-007 timing. Each scenario runs 3 times from empty memory. |
 
@@ -209,7 +222,7 @@ The default `test` task excludes evals (pytest marker `eval`). They need credent
 
 ## R16. Checks and CI
 
-**Decision**: mise tasks `setup`, `format`, `lint`, `typecheck`, `test`, `check`, and `eval`; GitHub Actions runs `mise run check` through `jdx/mise-action` pinned to a commit SHA. `ty check` on `src/` and `tests/`, set up as ty's mypy migration guide recommends for strict checking: the off-by-default rules `dynamic-function-decorator-return`, `missing-type-argument`, `possibly-unresolved-reference`, and `unsound-return-statement` are on, and ruff adds the `ANN` and `PYI` rule groups, because ty doesn't report missing annotations. ty exits non-zero on warnings as well as errors, so any diagnostic fails `check`. Escape hatches (`Any`, `cast`, `# ty: ignore[rule]`) are allowed only in the connector's conversion code, where genai and Anthropic types meet, with a comment saying why.
+**Decision**: mise tasks `setup`, `format`, `lint`, `typecheck`, `test`, `check`, and `eval`; GitHub Actions runs `mise run check` through `jdx/mise-action` pinned to a commit SHA. `ty check` on `src/` and `tests/`, set up as ty's mypy migration guide recommends for strict checking: the off-by-default rules `dynamic-function-decorator-return`, `missing-type-argument`, `possibly-unresolved-reference`, and `unsound-return-statement` are on, and ruff adds the `ANN` and `PYI` rule groups, because ty doesn't report missing annotations. ty exits non-zero on warnings as well as errors, so any diagnostic fails `check`. Escape hatches (`Any`, `cast`, `# ty: ignore[rule]`) are allowed only in `agents/claude_model.py`, where ADK's model interface requires them, with a comment saying why.
 
 **Rationale**: AGENTS.md makes `mise run` the only interface and `check` the CI gate. ty comes from Astral, like uv and ruff, which the project already uses. It is in beta and ships almost daily (0.0.96 through 0.0.101 between 2026-11-03 and 2026-11-11), so an upgrade can add diagnostics. The exact pin keeps `check` stable, and each upgrade is its own change.
 

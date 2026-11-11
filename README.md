@@ -29,7 +29,7 @@ Memory is a directory of small Markdown files:
 The cookbook relies on Managed Agents for the agent runtime, the memory store, the sandboxed file tools, and workflow runs. This tool does that work on your machine:
 
 - ADK runs the agents in one Python process.
-- A custom ADK model connector sends every model call through the official Anthropic Python SDK (`anthropic`). It subclasses `google.adk.models.BaseLlm` and implements `generate_content_async`, which turns ADK's `LlmRequest` into a Messages API request and Claude's reply, tool calls included, back into `LlmResponse` objects.
+- ADK's own `AnthropicLlm` sends every model call to the Claude API through the official Anthropic Python SDK (`anthropic`), converting between ADK's requests and replies and the Messages API. A thin subclass sets the model, sends thinking blocks with empty text back unchanged, and turns refusals and cut-off replies into failures.
 - Memory is a local directory in the format above.
 - The agents' file tools are Python functions. They read transcripts and can write only inside the memory directory.
 
@@ -50,12 +50,14 @@ Whatever lands in memory steers every later session that reads it.
 
 ## Requirements (planned)
 
-- Python and [uv](https://docs.astral.sh/uv/)
+- Python 3.15 and [uv](https://docs.astral.sh/uv/)
 - Claude API access through `ANTHROPIC_API_KEY` or a profile from `ant auth login`
 
 ## Development
 
 Read the [engineering constitution](.specify/memory/constitution.md) and the [repository guidelines](AGENTS.md) before proposing or implementing changes. The constitution is the project's authoritative engineering policy.
+
+To work on the code, install [mise](https://mise.jdx.dev) and run `mise trust`, then `mise run setup`. mise installs Python 3.15 and uv, and `setup` installs the locked dependencies. `mise run check` runs lint, type checks, and tests, the same gate CI uses. [AGENTS.md](AGENTS.md#required-checks) lists every task.
 
 Features go through [Spec Kit](https://github.com/github/spec-kit) 1.3.1, installed as skills for Claude Code (`.claude/skills/`) and Codex (`.agents/skills/`). In Claude Code, run each as a slash command, such as `/speckit-specify`.
 

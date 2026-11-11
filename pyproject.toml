@@ -1,0 +1,43 @@
+[project]
+name = "dreaming-workflow"
+version = "0.1.0"
+description = "Turn finished Claude Code and Codex sessions into a personal long-term memory"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.15"
+dependencies = [
+    "anthropic==2.8.0",
+    "google-adk==2.14.0",
+    "pyyaml==6.0.3",
+]
+
+[project.scripts]
+dream = "dreaming_workflow.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.pytest]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = ["--import-mode=importlib", "-m", "not eval"]
+markers = ["eval: calls the real Claude API; needs credentials and costs money"]
+
+[tool.ruff.lint]
+extend-select = ["ANN", "PYI"]
+
+[tool.ty.rules]
+dynamic-function-decorator-return = "error"
+missing-type-argument = "error"
+possibly-unresolved-reference = "error"
+unsound-return-statement = "error"
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "ruff==0.17.4",
+    "ty==0.0.101",
+    "types-pyyaml==6.0.12.20261111",
+]

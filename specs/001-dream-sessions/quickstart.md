@@ -101,4 +101,4 @@ Expected: the second command says another dream is running on the memory directo
 mise run eval
 ```
 
-Needs credentials and spends money; each run has a US$5 spending limit and the eval prints the total cost. It runs each scenario 3 times from empty memory and reports pass or fail for SC-001 to SC-007, SC-011, SC-012, and the semantic acceptance scenarios, plus the measured ratio of real to estimated tokens. Run it after any change to prompts, tools, the connector, or the parsers.
+Needs credentials and spends money; each run has a US$5 spending limit and the eval prints the total cost. It runs each scenario 3 times from empty memory and reports pass or fail for SC-001 to SC-007, SC-011, SC-012, and the semantic acceptance scenarios, plus the measured ratio of real to estimated tokens. Run it after any change to prompts, tools, `ClaudeModel` or the agent settings, or the parsers.
