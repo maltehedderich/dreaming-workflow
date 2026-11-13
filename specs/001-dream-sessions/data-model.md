@@ -77,7 +77,7 @@ Ordered list of `ConversationMessage` plus `estimated_tokens` (⌈characters of 
 
 ### `SelectionDecision`
 
-Either `Selected(session, parts)` or `Skipped(file, reason, detail)`. `detail` holds the estimated size for `too-large` and is empty otherwise. Preview and run both produce a list of these from the same function.
+Either `Selected(session, parts, sha256)` or `Skipped(file, reason, detail)`. `sha256` is the file's hash, read before parsing, so a file that changes during the run is analyzed again on the next one. `detail` holds the estimated size for `too-large` and is empty otherwise. Preview and run both produce a list of these from the same function.
 
 ## Memory
 
@@ -226,7 +226,7 @@ Shared by every request in a run.
 | `limit_reached` | bool |
 | `largest_prompt_tokens` | int (for SC-011 checks in evals) |
 
-**Rules**: Before each analysis request, if `cost_usd ≥ limit_usd`, set `limit_reached` and raise `SpendingLimitReached`. Organizer requests skip this check. After each response, add its usage and cost (formula in [research R4](research.md#r4-model-prices-and-cost)).
+**Rules**: `limit_reached` is true once `cost_usd ≥ limit_usd`. Before each analysis request, if the limit is reached, raise `AgentFailure` with `spending-limit-reached`. Organizer requests skip this check. After each response, add its usage and cost (formula in [research R4](research.md#r4-model-prices-and-cost)).
 
 ### `ContextGuard`
 

@@ -32,6 +32,15 @@ class SessionFile:
 
 
 @dataclass(frozen=True)
+class AnalyzedFile:
+    """What a session file held when an earlier run analyzed it."""
+
+    size: int
+    mtime_ns: int
+    sha256: str
+
+
+@dataclass(frozen=True)
 class Session:
     file: SessionFile
     tool: Tool
@@ -50,6 +59,7 @@ class SkipReason(StrEnum):
     NO_CONVERSATION = "no-conversation"
     OUTSIDE_WINDOW = "outside-window"
     ACTIVE = "active"
+    ALREADY_ANALYZED = "already-analyzed"
     TOO_LARGE = "too-large"
 
 
@@ -57,6 +67,9 @@ class SkipReason(StrEnum):
 class Selected:
     session: Session
     parts: tuple[Part, ...]
+    # The file's SHA-256, read before parsing: if the file changes in between,
+    # the next run analyzes it again rather than skipping new content.
+    sha256: str
 
 
 @dataclass(frozen=True)

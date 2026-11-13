@@ -6,6 +6,7 @@ from dreaming_workflow.sessions.discovery import (
     parse_session,
 )
 from dreaming_workflow.sessions.model import (
+    AnalyzedFile,
     Selected,
     SelectionDecision,
     Session,
@@ -27,6 +28,7 @@ from dreaming_workflow.sessions.view import (
 
 __all__ = [
     "PART_TOKEN_LIMIT",
+    "AnalyzedFile",
     "ConversationMessage",
     "ConversationView",
     "MessageKind",

@@ -39,6 +39,7 @@ from dreaming_workflow.sessions import (
 AT = datetime(2026, 11, 2, 10, 0, tzinfo=UTC)
 EMPTY = MemorySnapshot(hashes={}, stubs=frozenset(), conflicts=frozenset())
 SUCCEEDED = OrganizerResult(OrganizerStatus.SUCCEEDED)
+SHA256 = "0" * 64
 
 
 def session(name: str, tool: Tool = Tool.CLAUDE_CODE) -> Session:
@@ -96,7 +97,7 @@ def test_counts_add_up() -> None:
         failed("c", FailureReason.RATE_LIMITED),
     ]
     decisions: list[SelectionDecision] = [
-        *(Selected(result.session, ()) for result in results),
+        *(Selected(result.session, (), SHA256) for result in results),
         skipped("d", SkipReason.SUBTHREAD),
         skipped("e", SkipReason.ACTIVE),
         skipped("f", SkipReason.SUBTHREAD),
@@ -132,7 +133,9 @@ def test_counts_add_up() -> None:
 def test_any_failed_analysis_completes_with_failures(
     results: list[AnalysisResult], outcome: RunOutcome
 ) -> None:
-    decisions: list[SelectionDecision] = [Selected(r.session, ()) for r in results]
+    decisions: list[SelectionDecision] = [
+        Selected(r.session, (), SHA256) for r in results
+    ]
 
     assert report_for(decisions, results).outcome is outcome
 
@@ -143,7 +146,9 @@ def test_failed_organizer_completes_with_failures_and_keeps_its_reason() -> None
     )
 
     report = report_for(
-        [Selected(analyzed("a").session, ())], [analyzed("a")], organizer=organizer
+        [Selected(analyzed("a").session, (), SHA256)],
+        [analyzed("a")],
+        organizer=organizer,
     )
 
     assert report.organizer == OrganizerSummary(
@@ -233,3 +238,26 @@ def test_usage_counts_every_input_token() -> None:
     )
     assert report.usage.output_tokens == 1_000
     assert report.usage.cost_usd == Decimal("0.00225")
+
+
+@pytest.mark.parametrize(
+    ("limit", "reached"), [(Decimal("0.00225"), True), (Decimal("0.0023"), False)]
+)
+def test_usage_says_whether_the_spending_limit_was_reached(
+    limit: Decimal, reached: bool
+) -> None:
+    ledger = UsageLedger(limit_usd=limit)
+    # 10,000 input tokens at US$0.10 and 2,500 output tokens at US$0.50 per
+    # million cost US$0.00225.
+    ledger.add(
+        TokenUsage(
+            input_tokens=10_000,
+            cache_write_tokens=0,
+            cache_read_tokens=0,
+            output_tokens=2_500,
+        )
+    )
+
+    usage = report_for([], [], ledger=ledger).usage
+
+    assert (usage.limit_usd, usage.limit_reached) == (limit, reached)

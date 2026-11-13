@@ -41,7 +41,7 @@ def sources(tmp_path: Path, *session_files: Path) -> SessionSources:
 
 
 def select(source: SessionSources) -> list[SelectionDecision]:
-    return discover_and_select(source, since=SINCE, now=RUN_START)
+    return discover_and_select(source, since=SINCE, now=RUN_START, analyzed={})
 
 
 def claude_file(tmp_path: Path, name: str) -> Path:

@@ -11,6 +11,7 @@ PROMPT_CEILING = 95_000
 _MILLION = Decimal(1_000_000)
 CACHE_WRITE_MULTIPLIER = Decimal("1.25")
 CACHE_READ_MULTIPLIER = Decimal("0.1")
+DEFAULT_SPENDING_LIMIT = Decimal("10.00")
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,7 @@ def cost(usage: TokenUsage, prices: PriceTable = PRICES) -> Decimal:
 
 @dataclass
 class UsageLedger:
-    """Usage and cost of every request in a run."""
+    """Usage and cost of every request in a run, and the run's spending limit."""
 
     input_tokens: int = 0
     cache_write_tokens: int = 0
@@ -80,11 +81,25 @@ class UsageLedger:
     output_tokens: int = 0
     cost_usd: Decimal = Decimal(0)
     largest_prompt_tokens: int = 0
+    limit_usd: Decimal = DEFAULT_SPENDING_LIMIT
 
     @property
     def prompt_tokens(self) -> int:
         """Every input token: uncached, cache writes, and cache reads."""
         return self.input_tokens + self.cache_write_tokens + self.cache_read_tokens
+
+    @property
+    def limit_reached(self) -> bool:
+        return self.cost_usd >= self.limit_usd
+
+    def check_before_analysis_request(self) -> None:
+        """Raise `spending-limit-reached` once the run's cost reaches its limit.
+
+        Only analysis requests are checked: the organizer still runs, so files
+        the analyses wrote get organized.
+        """
+        if self.limit_reached:
+            raise AgentFailure(Failure(FailureReason.SPENDING_LIMIT_REACHED))
 
     def add(self, usage: TokenUsage) -> None:
         self.input_tokens += usage.input_tokens

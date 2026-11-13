@@ -9,7 +9,12 @@ from decimal import Decimal
 import anthropic._base_client
 import pytest
 
-from dreaming_workflow.agents import AgentFailure, ClaudeModel, FailureReason
+from dreaming_workflow.agents import (
+    AgentFailure,
+    AgentRole,
+    ClaudeModel,
+    FailureReason,
+)
 from dreaming_workflow.agents.budget import ContextGuard, UsageLedger
 from dreaming_workflow.agents.claude_model import MissingCredentials, create_client
 from dreaming_workflow.agents.runner import run_agent
@@ -32,9 +37,13 @@ def run(
     api: FakeMessagesApi,
     message: str = "Note: hello.",
     ledger: UsageLedger | None = None,
+    role: AgentRole = AgentRole.ANALYSIS,
 ) -> None:
     model = ClaudeModel(
-        client=api.client(), ledger=ledger or UsageLedger(), guard=ContextGuard()
+        client=api.client(),
+        role=role,
+        ledger=ledger or UsageLedger(),
+        guard=ContextGuard(),
     )
     asyncio.run(
         run_agent(
@@ -141,6 +150,36 @@ def test_usage_lands_in_the_ledger_at_list_price() -> None:
     # 10,000 × 0.10 + 2,000 × 0.125 + 50,000 × 0.01 + 1,000 × 0.50 = 2,250 per million.
     assert ledger.cost_usd == Decimal("0.00225")
     assert ledger.largest_prompt_tokens == 62_000
+
+
+def ledger_with_cost(cost_usd: str, limit_usd: str) -> UsageLedger:
+    return UsageLedger(cost_usd=Decimal(cost_usd), limit_usd=Decimal(limit_usd))
+
+
+def test_analysis_request_at_the_spending_limit_sends_nothing() -> None:
+    api = always(MessageReply(content=[text_block("Done.")]))
+
+    with pytest.raises(AgentFailure) as raised:
+        run(api, ledger=ledger_with_cost("0.50", "0.50"))
+
+    assert raised.value.failure.reason is FailureReason.SPENDING_LIMIT_REACHED
+    assert api.requests == []
+
+
+def test_organizer_request_at_the_spending_limit_is_sent() -> None:
+    api = always(MessageReply(content=[text_block("Done.")]))
+
+    run(api, ledger=ledger_with_cost("0.50", "0.50"), role=AgentRole.ORGANIZER)
+
+    assert len(api.requests) == 1
+
+
+def test_analysis_request_below_the_spending_limit_is_sent() -> None:
+    api = always(MessageReply(content=[text_block("Done.")]))
+
+    run(api, ledger=ledger_with_cost("0.49", "0.50"))
+
+    assert len(api.requests) == 1
 
 
 def test_create_client_without_credentials_raises() -> None:

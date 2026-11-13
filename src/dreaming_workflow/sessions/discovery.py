@@ -4,8 +4,9 @@ Preview and run both call `discover_and_select`, so a preview lists exactly
 what a run would select.
 """
 
+import hashlib
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ from pathlib import Path
 from dreaming_workflow.sessions.claude_code import parse_claude_code
 from dreaming_workflow.sessions.codex import parse_codex
 from dreaming_workflow.sessions.model import (
+    AnalyzedFile,
     Selected,
     SelectionDecision,
     Session,
@@ -83,7 +85,14 @@ def _candidates(sources: SessionSources) -> list[SessionFile]:
     return sorted(found, key=lambda file: file.path)
 
 
-def _decide(file: SessionFile, since: datetime, now: datetime) -> SelectionDecision:
+def _sha256(path: Path) -> str:
+    with path.open("rb") as content:
+        return hashlib.file_digest(content, "sha256").hexdigest()
+
+
+def _decide(
+    file: SessionFile, sha256: str, since: datetime, now: datetime
+) -> SelectionDecision:
     session = parse_session(file)
     if session is None:
         return Skipped(file, SkipReason.UNRECOGNIZED)
@@ -98,14 +107,22 @@ def _decide(file: SessionFile, since: datetime, now: datetime) -> SelectionDecis
     if is_too_large(session.view):
         detail = f"{session.view.estimated_tokens:,} estimated tokens"
         return Skipped(file, SkipReason.TOO_LARGE, detail)
-    return Selected(session, tuple(split_into_parts(session.view)))
+    return Selected(session, tuple(split_into_parts(session.view)), sha256)
 
 
 def discover_and_select(
-    sources: SessionSources, since: datetime, now: datetime
+    sources: SessionSources,
+    since: datetime,
+    now: datetime,
+    *,
+    analyzed: Mapping[Path, AnalyzedFile],
 ) -> list[SelectionDecision]:
     """Return a decision for every file found: selected sessions first, oldest
     last activity first, then skipped files in path order.
+
+    `analyzed` holds the files earlier runs analyzed, by path. A file with the
+    same size and modification time is skipped without being read; otherwise
+    an unchanged SHA-256 skips it too.
     """
     since_ns = int(since.timestamp() * 1_000_000_000)
     selected: list[Selected] = []
@@ -118,7 +135,18 @@ def discover_and_select(
         # so it isn't parsed or counted as found. Named files always count.
         if not sources.session_files and file.mtime_ns < since_ns:
             continue
-        match _decide(file, since, now):
+        previous = analyzed.get(file.path)
+        if previous is not None and (previous.size, previous.mtime_ns) == (
+            file.size,
+            file.mtime_ns,
+        ):
+            skipped.append(Skipped(file, SkipReason.ALREADY_ANALYZED))
+            continue
+        sha256 = _sha256(file.path)
+        if previous is not None and previous.sha256 == sha256:
+            skipped.append(Skipped(file, SkipReason.ALREADY_ANALYZED))
+            continue
+        match _decide(file, sha256, since, now):
             case Selected() as decision:
                 selected.append(decision)
             case Skipped() as decision:

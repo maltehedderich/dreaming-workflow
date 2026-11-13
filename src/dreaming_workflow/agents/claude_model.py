@@ -28,6 +28,7 @@ from google.genai import types
 from pydantic import Field, PrivateAttr
 
 from dreaming_workflow.agents.budget import ContextGuard, TokenUsage, UsageLedger
+from dreaming_workflow.agents.invocation import AgentRole
 from dreaming_workflow.agents.results import AgentFailure, Failure, FailureReason
 from dreaming_workflow.sessions.view import estimate_tokens
 
@@ -198,12 +199,14 @@ def _restore_empty_thinking(messages: list[MessageParam]) -> None:
 class ClaudeModel(AnthropicLlm):
     """The model for one agent invocation.
 
-    `ledger` is shared by every request in the run; `guard` belongs to this
-    invocation and stops a request whose prompt would pass the ceiling.
+    `ledger` is shared by every request in the run and stops analysis requests
+    at the spending limit; `guard` belongs to this invocation and stops a
+    request whose prompt would pass the ceiling.
     """
 
     model: str = MODEL
     max_tokens: int = MAX_TOKENS
+    role: AgentRole = AgentRole.ANALYSIS
     ledger: UsageLedger = Field(default_factory=UsageLedger, exclude=True)
     guard: ContextGuard = Field(default_factory=ContextGuard, exclude=True)
     # How many contents the previous request carried; ADK resends them all and
@@ -214,6 +217,8 @@ class ClaudeModel(AnthropicLlm):
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
     ) -> AsyncGenerator[LlmResponse]:
+        if self.role is AgentRole.ANALYSIS:
+            self.ledger.check_before_analysis_request()
         if self._contents_sent is None:
             new_tokens = _whole_request_tokens(llm_request)
         else:

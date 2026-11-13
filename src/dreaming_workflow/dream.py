@@ -5,6 +5,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from google.adk.models import BaseLlm
@@ -23,7 +24,7 @@ from dreaming_workflow.agents import (
     organize,
     select_input,
 )
-from dreaming_workflow.agents.budget import UsageLedger
+from dreaming_workflow.agents.budget import DEFAULT_SPENDING_LIMIT, UsageLedger
 from dreaming_workflow.memory import (
     FormatViolation,
     MemoryStore,
@@ -34,10 +35,16 @@ from dreaming_workflow.memory.backup import save_copy
 from dreaming_workflow.report import Report, RunOutcome, build_report, index_stats
 from dreaming_workflow.sessions import (
     Selected,
+    SelectionDecision,
     SessionSources,
     discover_and_select,
 )
-from dreaming_workflow.state import DreamRecord, ensure_state_dir
+from dreaming_workflow.state import (
+    DreamRecord,
+    RunLock,
+    SessionRecord,
+    ensure_state_dir,
+)
 
 GROUP_SIZE = 20
 
@@ -52,12 +59,30 @@ class RunOptions:
     codex_dir: Path
     # When given, these files replace both directory scans.
     session_files: tuple[Path, ...] = ()
+    # Analysis requests stop once the run's cost at list price reaches it.
+    spending_limit: Decimal = DEFAULT_SPENDING_LIMIT
+
+    @property
+    def sources(self) -> SessionSources:
+        return SessionSources(
+            claude_code_dir=self.claude_code_dir,
+            codex_dir=self.codex_dir,
+            session_files=self.session_files,
+        )
 
 
 @dataclass(frozen=True)
 class RunResult:
     report: Report
     outcome: RunOutcome
+
+
+@dataclass(frozen=True)
+class Preview:
+    since: datetime
+    until: datetime
+    decisions: tuple[SelectionDecision, ...]
+    waiting_files: int
 
 
 def run_id_for(started_at: datetime) -> str:
@@ -96,6 +121,22 @@ class _StopAfterAuthenticationFailure:
             self.stopped = True
 
 
+def _session_record(
+    decision: Selected, result: AnalysisResult, run_id: str
+) -> SessionRecord:
+    session = decision.session
+    return SessionRecord(
+        tool=session.tool,
+        session_id=session.session_id,
+        size=session.file.size,
+        mtime_ns=session.file.mtime_ns,
+        sha256=decision.sha256,
+        status=result.status,
+        failure=None if result.failure is None else result.failure.reason,
+        run_id=run_id,
+    )
+
+
 def _progress_line(result: AnalysisResult) -> str:
     session = result.session
     name = f"{session.tool.value} {session.session_id}"
@@ -129,6 +170,24 @@ async def _organize(
     return result
 
 
+def preview(options: RunOptions, *, now: datetime) -> Preview:
+    """List what a run started now would select, using the same selection.
+
+    Needs no credentials, sends nothing, and creates no file or directory.
+    Raises `RecordError` if the dream record can't be read.
+    """
+    record = DreamRecord.load(options.memory_dir)
+    decisions = discover_and_select(
+        options.sources, options.since, now, analyzed=record.analyzed_files()
+    )
+    return Preview(
+        since=options.since,
+        until=now,
+        decisions=tuple(decisions),
+        waiting_files=len(record.waiting_files),
+    )
+
+
 async def run(
     options: RunOptions,
     *,
@@ -138,16 +197,24 @@ async def run(
 ) -> RunResult:
     """Analyze the selected sessions, organize memory, and check its format.
 
-    Raises `RecordError` before changing anything if the dream record can't be read.
+    Before changing anything, raises `MemoryInUse` if another dream holds the
+    memory directory, and `RecordError` if the dream record can't be read.
     """
+    with RunLock(ensure_state_dir(options.memory_dir)):
+        return await _run_locked(options, now, model_factory, progress)
+
+
+async def _run_locked(
+    options: RunOptions,
+    now: datetime,
+    model_factory: ModelFactory,
+    progress: Progress,
+) -> RunResult:
     run_id = run_id_for(now)
     record = DreamRecord.load(options.memory_dir)
-    sources = SessionSources(
-        claude_code_dir=options.claude_code_dir,
-        codex_dir=options.codex_dir,
-        session_files=options.session_files,
+    decisions = discover_and_select(
+        options.sources, options.since, now, analyzed=record.analyzed_files()
     )
-    decisions = discover_and_select(sources, options.since, now)
     selected = [d for d in decisions if isinstance(d, Selected)]
     progress(
         f"Found {_plural(len(decisions), 'session')}: {len(selected)} selected, "
@@ -168,7 +235,7 @@ async def run(
         on_analysis_write=record.mark_waiting,
     )
     start = store.snapshot()
-    ledger = UsageLedger()
+    ledger = UsageLedger(limit_usd=options.spending_limit)
     factory = _StopAfterAuthenticationFailure(model_factory)
 
     def report_for(
@@ -205,6 +272,9 @@ async def run(
             decision.session, decision.parts, store, factory, ledger
         )
         factory.note(result)
+        record.record_session(
+            decision.session.file.path, _session_record(decision, result, run_id)
+        )
         progress(_progress_line(result))
         return result
 

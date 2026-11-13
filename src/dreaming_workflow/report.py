@@ -79,6 +79,8 @@ class Usage:
     cache_write_tokens: int
     output_tokens: int
     cost_usd: Decimal
+    limit_usd: Decimal
+    limit_reached: bool
 
 
 @dataclass(frozen=True)
@@ -151,6 +153,8 @@ def usage_of(ledger: UsageLedger) -> Usage:
         cache_write_tokens=ledger.cache_write_tokens,
         output_tokens=ledger.output_tokens,
         cost_usd=ledger.cost_usd,
+        limit_usd=ledger.limit_usd,
+        limit_reached=ledger.limit_reached,
     )
 
 

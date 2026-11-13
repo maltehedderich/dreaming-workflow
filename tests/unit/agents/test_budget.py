@@ -94,3 +94,30 @@ def test_a_response_resets_the_projection_to_its_prompt_and_reply() -> None:
     guard.record_response(USAGE)
 
     assert guard.projected_tokens == 62_000 + 1_000
+
+
+def test_analysis_requests_stop_once_cost_equals_the_limit() -> None:
+    ledger = UsageLedger(limit_usd=Decimal("0.00225"))
+    ledger.check_before_analysis_request()
+    assert not ledger.limit_reached
+
+    ledger.add(USAGE)
+
+    assert ledger.cost_usd == Decimal("0.00225")
+    assert ledger.limit_reached
+    with pytest.raises(AgentFailure) as raised:
+        ledger.check_before_analysis_request()
+    assert raised.value.failure.reason is FailureReason.SPENDING_LIMIT_REACHED
+
+
+def test_analysis_requests_continue_below_the_limit() -> None:
+    ledger = UsageLedger(limit_usd=Decimal("0.00226"))
+
+    ledger.add(USAGE)
+
+    assert not ledger.limit_reached
+    ledger.check_before_analysis_request()
+
+
+def test_the_default_limit_is_ten_dollars() -> None:
+    assert UsageLedger().limit_usd == Decimal("10.00")

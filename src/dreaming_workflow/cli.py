@@ -4,7 +4,7 @@ import logging
 import re
 import sys
 from datetime import UTC, date, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
 from dreaming_workflow import dream
@@ -15,9 +15,16 @@ from dreaming_workflow.agents import (
     OrganizerStatus,
     create_client,
 )
+from dreaming_workflow.agents.budget import DEFAULT_SPENDING_LIMIT
 from dreaming_workflow.agents.claude_model import MissingCredentials
 from dreaming_workflow.report import OrganizerSummary, Report, RunOutcome
-from dreaming_workflow.state import RecordError, RecordProblem, state_dir
+from dreaming_workflow.sessions import Selected, Skipped, SkipReason
+from dreaming_workflow.state import (
+    MemoryInUse,
+    RecordError,
+    RecordProblem,
+    state_dir,
+)
 
 # Third-party loggers can carry request bodies at DEBUG level, and those hold
 # session and memory content.
@@ -76,7 +83,34 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="session file to consider instead of scanning directories; repeatable",
     )
+    parser.add_argument(
+        "--spending-limit",
+        type=_spending_limit,
+        default=DEFAULT_SPENDING_LIMIT,
+        metavar="USD",
+        help=(
+            "stop sending analysis requests once the run's cost at list price "
+            f"reaches this amount (default {DEFAULT_SPENDING_LIMIT})"
+        ),
+    )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="list what a run would send; sends nothing, changes no files, needs no credentials",
+    )
     return parser
+
+
+def _spending_limit(text: str) -> Decimal:
+    try:
+        amount = Decimal(text)
+    except InvalidOperation:
+        raise argparse.ArgumentTypeError(
+            "use an amount in US dollars, such as 10.00"
+        ) from None
+    if not amount.is_finite() or amount <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return amount
 
 
 def parse_since(text: str) -> datetime | None:
@@ -101,7 +135,10 @@ def _real_model_factory() -> ModelFactory:
 
     def model_for(invocation: Invocation) -> ClaudeModel:
         return ClaudeModel(
-            client=client, ledger=invocation.ledger, guard=invocation.guard
+            client=client,
+            role=invocation.role,
+            ledger=invocation.ledger,
+            guard=invocation.guard,
         )
 
     return model_for
@@ -118,6 +155,75 @@ def _row(label: str, value: object, indent: str = "  ") -> str:
 
 def _usd(amount: Decimal) -> str:
     return f"US${amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)}"
+
+
+def _limit_usd(amount: Decimal) -> str:
+    """Show the limit in cents, or exactly if the user gave fractions of a cent."""
+    cents = amount.quantize(Decimal("0.01"))
+    return f"US${cents}" if cents == amount else f"US${amount.normalize():f}"
+
+
+def _minute(at: datetime) -> str:
+    return f"{at.astimezone(UTC):%Y-%m-%d %H:%M}"
+
+
+def _selected_table(selected: list[Selected]) -> list[str]:
+    """Rows of selected sessions, each followed by its file path."""
+    rows = [
+        (
+            decision.session.tool.value,
+            _minute(decision.session.last_activity_at),
+            decision.session.project_dir,
+            f"{decision.session.file.size / 1024:,.1f} KB",
+            f"{decision.session.view.estimated_tokens:,}",
+            f"{len(decision.parts):,}",
+        )
+        for decision in selected
+    ]
+    header = ("tool", "last activity", "project dir", "size", "est. tokens", "parts")
+    widths = [
+        max(len(row[column]) for row in (header, *rows))
+        for column in range(len(header))
+    ]
+
+    def line(row: tuple[str, ...]) -> str:
+        tool, activity, project, size, tokens, parts = row
+        return (
+            f"  {tool:<{widths[0]}}  {activity:<{widths[1]}}   "
+            f"{project:<{widths[2]}}  {size:>{widths[3]}}  "
+            f"{tokens:>{widths[4]}}  {parts:>{widths[5]}}"
+        )
+
+    lines = [line(header)]
+    for decision, row in zip(selected, rows, strict=True):
+        lines.extend([line(row), f"    {decision.session.file.path}"])
+    return lines
+
+
+def _skipped_line(decision: Skipped) -> str:
+    reason = decision.reason.value
+    if decision.reason is SkipReason.TOO_LARGE:
+        reason += f" ({decision.detail})"
+    return f"  {decision.file.path}  {reason}"
+
+
+def render_preview(preview: dream.Preview) -> str:
+    selected = [d for d in preview.decisions if isinstance(d, Selected)]
+    skipped = [d for d in preview.decisions if isinstance(d, Skipped)]
+    total = sum(d.session.view.estimated_tokens for d in selected)
+    lines = [
+        f"Preview: window {_minute(preview.since)} UTC to {_minute(preview.until)} UTC",
+        "",
+        f"Selected sessions ({len(selected):,})",
+        *(_selected_table(selected) if selected else []),
+        f"Total estimated tokens: {total:,}",
+        "",
+        f"Memory files waiting for the organizer: {preview.waiting_files:,}",
+        "",
+        f"Skipped sessions ({len(skipped):,})",
+        *(_skipped_line(d) for d in skipped),
+    ]
+    return "\n".join(lines)
 
 
 def _sessions_block(report: Report) -> list[str]:
@@ -209,6 +315,11 @@ def render_report(report: Report) -> str:
                 f"{usage.cache_write_tokens:,} cache write), {usage.output_tokens:,} output",
             ),
             _row("cost at list price", _usd(usage.cost_usd)),
+            _row(
+                "spending limit",
+                f"{_limit_usd(usage.limit_usd)}, "
+                f"{'reached' if usage.limit_reached else 'not reached'}",
+            ),
             "",
             _row(
                 "Pre-run copy",
@@ -218,6 +329,15 @@ def render_report(report: Report) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _record_unreadable(error: RecordError) -> int:
+    print(
+        f"dream: can't read the dream record {error.path}: "
+        f"{_RECORD_PROBLEMS[error.problem]}. Nothing was changed.",
+        file=sys.stderr,
+    )
+    return RunOutcome.NOT_STARTED.exit_code
 
 
 def main(
@@ -250,6 +370,22 @@ def main(
         if not path.is_file():
             parser.error(f"--session {path}: no such file")
 
+    options = dream.RunOptions(
+        memory_dir=args.memory,
+        since=since,
+        claude_code_dir=args.claude_code_dir or Path.home() / ".claude" / "projects",
+        codex_dir=args.codex_dir or Path.home() / ".codex" / "sessions",
+        session_files=tuple(session_files),
+        spending_limit=args.spending_limit,
+    )
+    if args.preview:
+        try:
+            preview = dream.preview(options, now=started_at)
+        except RecordError as error:
+            return _record_unreadable(error)
+        print(render_preview(preview))
+        return RunOutcome.SUCCESS.exit_code
+
     for name in _QUIET_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
     if model_factory is None:
@@ -259,24 +395,18 @@ def main(
             print(MISSING_CREDENTIALS, file=sys.stderr)
             return RunOutcome.NOT_STARTED.exit_code
 
-    options = dream.RunOptions(
-        memory_dir=args.memory,
-        since=since,
-        claude_code_dir=args.claude_code_dir or Path.home() / ".claude" / "projects",
-        codex_dir=args.codex_dir or Path.home() / ".codex" / "sessions",
-        session_files=tuple(session_files),
-    )
     try:
         result = asyncio.run(
             dream.run(options, now=started_at, model_factory=model_factory)
         )
-    except RecordError as error:
+    except MemoryInUse:
         print(
-            f"dream: can't read the dream record {error.path}: "
-            f"{_RECORD_PROBLEMS[error.problem]}. Nothing was changed.",
+            f"dream: another dream is running on {args.memory}. Nothing was changed.",
             file=sys.stderr,
         )
         return RunOutcome.NOT_STARTED.exit_code
+    except RecordError as error:
+        return _record_unreadable(error)
     except KeyboardInterrupt:
         backups = state_dir(args.memory) / "backups"
         print(
