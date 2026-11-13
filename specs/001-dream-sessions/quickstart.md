@@ -5,7 +5,7 @@ Runnable checks that the feature works, from setup to the model-dependent evals.
 ## Prerequisites
 
 - mise installed; it pins Python 3.15 and uv.
-- For the steps that call Claude: credentials through `ANTHROPIC_API_KEY` or a profile from `ant auth login`. Each run over the examples sends their conversation views to the Claude API and costs money at Claude Haiku 5.5 list prices; the report prints the cost.
+- For the steps that call Claude: credentials through `ANTHROPIC_API_KEY` or a profile from `ant auth login`. Each run over the examples sends their conversation views to the Claude API and costs money at Claude Sonnet 5.5 list prices; the report prints the cost.
 
 ## 1. Set up and run the required checks
 

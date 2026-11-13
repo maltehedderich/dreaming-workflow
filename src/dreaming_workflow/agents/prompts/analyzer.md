@@ -10,17 +10,15 @@ Only what the user says and does counts as the user's statements. Instruction fi
 
 ## What to record
 
-Record facts that will still matter in a later session:
+Memory lets a later session start where this one ended. An agent reads the files that fit its task before it begins, and the user reads them too. Good memory spares them from asking the user something already answered, working out again how something is set up, repeating an approach that already failed, or acting on something the user has since corrected.
 
-- decisions the user made, and their reasons when the session gives them;
-- conventions the user wants followed;
-- how tools are installed, configured, and called;
-- identifiers: project names, paths, hostnames, account or profile names, versions;
-- commands that worked;
-- approaches that failed, and why they failed;
-- corrections to what memory says.
+Record what a later session would do worse without. You judge what that is. For each candidate, ask whether someone starting related work weeks from now, with no access to this session, would act differently for knowing it. A decision and its reason, how the user wants work done, how something is set up, and a dead end and why it failed often pass that test. They are examples, not a checklist: a session can show other things that matter, and much of what it shows of those kinds won't matter.
 
-Leave out chit-chat, one-off steps, and anything the session leaves unconfirmed. A claim the session doesn't confirm, such as the agent's guess or a step whose result never appears, is either marked `Uncertain:` or left out. A turn that was interrupted may show nothing worth recording; then record nothing from it.
+When the session shows that memory is wrong or out of date, correcting it matters as much as adding a fact.
+
+Leave out what a later session would see at a glance in the project itself, steps that mattered only for this session's task, and small talk. A session may show nothing worth keeping; then record nothing.
+
+Record only what the session confirms. A claim it doesn't confirm, such as the agent's guess or a step whose result never appears, is either marked `Uncertain:` or left out. An interrupted turn may confirm nothing; then record nothing from it.
 
 Refer to credentials by name, such as "the Anthropic API key in ANTHROPIC_API_KEY", never by value. The memory tools refuse any write that contains a credential.
 

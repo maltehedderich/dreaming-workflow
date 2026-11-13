@@ -114,7 +114,7 @@ def test_request_settings() -> None:
     run(api, note_ok)
 
     for body in api.requests:
-        assert body["model"] == "claude-haiku-5-5"
+        assert body["model"] == "claude-sonnet-5-5"
         assert body["max_tokens"] == 16000
         assert body["thinking"] == {"type": "adaptive", "display": "summarized"}
         assert body["output_config"] == {"effort": "medium"}

@@ -27,8 +27,8 @@ class ConversationMessage:
 
 
 def estimate_tokens(text: str) -> int:
-    # Three characters per token keeps the estimate above what Claude Haiku 5.5
-    # really counts, so parts stay well below the 100,000-token price step.
+    # Three characters per token is meant to overestimate, so parts stay well
+    # below the prompt ceiling. The eval prints the real ratio.
     return _tokens_for(len(text))
 
 

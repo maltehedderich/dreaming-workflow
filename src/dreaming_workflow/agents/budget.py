@@ -9,36 +9,30 @@ from dreaming_workflow.agents.results import AgentFailure, Failure, FailureReaso
 READ_BUDGET = 75_000
 PROMPT_CEILING = 95_000
 _MILLION = Decimal(1_000_000)
-CACHE_WRITE_MULTIPLIER = Decimal("1.25")
-CACHE_READ_MULTIPLIER = Decimal("0.1")
 DEFAULT_SPENDING_LIMIT = Decimal("10.00")
 
 
 @dataclass(frozen=True)
-class Rates:
+class PriceTable:
     """US dollars per million tokens."""
 
-    input: Decimal
-    output: Decimal
-
-
-@dataclass(frozen=True)
-class PriceTable:
     model: str
     checked_on: date
-    standard: Rates
-    # Applies to every token of a request whose prompt passes the threshold.
-    long_prompt: Rates
-    long_prompt_threshold: int
+    input: Decimal
+    # Writes to the 5-minute cache, the only lifetime the agents use.
+    cache_write: Decimal
+    cache_read: Decimal
+    output: Decimal
 
 
 # List prices from https://platform.claude.com/docs/en/about-claude/pricing.
 PRICES = PriceTable(
-    model="claude-haiku-5-5",
+    model="claude-sonnet-5-5",
     checked_on=date(2026, 11, 13),
-    standard=Rates(input=Decimal("0.10"), output=Decimal("0.50")),
-    long_prompt=Rates(input=Decimal("0.50"), output=Decimal("2.50")),
-    long_prompt_threshold=100_000,
+    input=Decimal("2.00"),
+    cache_write=Decimal("2.50"),
+    cache_read=Decimal("0.10"),
+    output=Decimal("10.00"),
 )
 
 
@@ -57,16 +51,11 @@ class TokenUsage:
 
 
 def cost(usage: TokenUsage, prices: PriceTable = PRICES) -> Decimal:
-    rates = (
-        prices.standard
-        if usage.prompt_tokens <= prices.long_prompt_threshold
-        else prices.long_prompt
-    )
     total = (
-        usage.input_tokens * rates.input
-        + usage.cache_write_tokens * rates.input * CACHE_WRITE_MULTIPLIER
-        + usage.cache_read_tokens * rates.input * CACHE_READ_MULTIPLIER
-        + usage.output_tokens * rates.output
+        usage.input_tokens * prices.input
+        + usage.cache_write_tokens * prices.cache_write
+        + usage.cache_read_tokens * prices.cache_read
+        + usage.output_tokens * prices.output
     )
     return total / _MILLION
 

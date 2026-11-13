@@ -237,18 +237,18 @@ def test_usage_counts_every_input_token() -> None:
         2_000,
     )
     assert report.usage.output_tokens == 1_000
-    assert report.usage.cost_usd == Decimal("0.00225")
+    assert report.usage.cost_usd == Decimal("0.04")
 
 
 @pytest.mark.parametrize(
-    ("limit", "reached"), [(Decimal("0.00225"), True), (Decimal("0.0023"), False)]
+    ("limit", "reached"), [(Decimal("0.045"), True), (Decimal("0.046"), False)]
 )
 def test_usage_says_whether_the_spending_limit_was_reached(
     limit: Decimal, reached: bool
 ) -> None:
     ledger = UsageLedger(limit_usd=limit)
-    # 10,000 input tokens at US$0.10 and 2,500 output tokens at US$0.50 per
-    # million cost US$0.00225.
+    # 10,000 input tokens at US$2.00 and 2,500 output tokens at US$10.00 per
+    # million cost US$0.045.
     ledger.add(
         TokenUsage(
             input_tokens=10_000,

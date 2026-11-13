@@ -33,6 +33,8 @@ The cookbook relies on Managed Agents for the agent runtime, the memory store, t
 - Memory is a local directory in the format above.
 - The agents' file tools are Python functions. They read transcripts and can write only inside the memory directory.
 
+Both agents run on Claude Sonnet 5.5, where the cookbook uses Claude Haiku 5.5. The analyzer's instructions say what memory is for and leave the choice of what to record to the model. Anthropic's [memory research](https://www.anthropic.com/research/components-of-agent-memory) found that this works better than fixed rules on stronger models.
+
 There is no lead agent. Every run follows the same sequence: analyzers in groups of at most 20, then the organizer. The [first feature spec](specs/001-dream-sessions/spec.md) explains why.
 
 Memory is organized by domain. The cookbook's index has `## <domain>` headings but no rule for choosing a domain. Here the agents file facts under broad areas of the user's work or life, such as development or business, and inside a domain under `### <subdomain>` headings, such as one per project. Domains come from what the sessions cover; there is no fixed list.

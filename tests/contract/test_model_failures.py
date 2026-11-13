@@ -147,8 +147,8 @@ def test_usage_lands_in_the_ledger_at_list_price() -> None:
         ledger.cache_read_tokens,
         ledger.output_tokens,
     ) == (10_000, 2_000, 50_000, 1_000)
-    # 10,000 × 0.10 + 2,000 × 0.125 + 50,000 × 0.01 + 1,000 × 0.50 = 2,250 per million.
-    assert ledger.cost_usd == Decimal("0.00225")
+    # 10,000 × 2.00 + 2,000 × 2.50 + 50,000 × 0.10 + 1,000 × 10.00 = 40,000 per million.
+    assert ledger.cost_usd == Decimal("0.04")
     assert ledger.largest_prompt_tokens == 62_000
 
 

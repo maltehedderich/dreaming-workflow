@@ -38,7 +38,7 @@ Replies map back: `thinking` → thought part with the signature as bytes and th
 
 Settings, in three places:
 
-- On the model: `model="claude-haiku-5-5"`, `max_tokens=16000`, and the client from `create_client()`, `AsyncAnthropic(timeout=anthropic.Timeout(300.0, connect=10.0), max_retries=3)`. ADK uses a client it is given as is.
+- On the model: `model="claude-sonnet-5-5"`, `max_tokens=16000`, and the client from `create_client()`, `AsyncAnthropic(timeout=anthropic.Timeout(300.0, connect=10.0), max_retries=3)`. ADK uses a client it is given as is.
 - On each agent: `generate_content_config=AnthropicGenerateContentConfig(effort="medium", thinking_config=ThinkingConfig(thinking_budget=-1))`. ADK sends `thinking={"type": "adaptive", "display": "summarized"}` and `output_config={"effort": "medium"}`, and no sampling parameters.
 - On each app: `context_cache_config=ContextCacheConfig()`, which turns on the three breakpoints above, each `{"type": "ephemeral"}`. ADK asks for Claude's 1-hour cache only when the TTL is at least an hour; the default is 30 minutes.
 
@@ -46,14 +46,14 @@ Settings, in three places:
 
 `ClaudeModel` changes two things:
 
-1. **Thinking blocks with empty text go back as thinking blocks.** Claude Haiku 5.5 omits thinking text unless the request asks for summaries, and the API needs every thinking block back unchanged with the tool results. ADK reads a thought part with empty text as redacted thinking and sends `{"type": "redacted_thinking", "data": <signature>}` in its place. `ClaudeModel` overrides ADK's private `_build_anthropic_kwargs`, the one method that sees the converted messages, and turns each such block back into `{"type": "thinking", "thinking": "", "signature": …}`. That is safe because `ClaudeModel` fails any reply that holds real redacted thinking, which Claude Haiku 5.5 doesn't send. Summarized display makes empty text rare; the override covers the rest.
-2. **Unusable replies fail the part.** `STOP` is normal. `MAX_TOKENS` raises `AgentFailure` with `max-tokens`. `SAFETY` raises `refused`; Claude Haiku 5.5 has no server-side fallback. Any other finish reason, or a thought part without text (redacted thinking), raises `invalid-model-output` rather than dropping the block silently.
+1. **Thinking blocks with empty text go back as thinking blocks.** Claude Sonnet 5.5 omits thinking text unless the request asks for summaries, and the API needs every thinking block back unchanged with the tool results. ADK reads a thought part with empty text as redacted thinking and sends `{"type": "redacted_thinking", "data": <signature>}` in its place. `ClaudeModel` overrides ADK's private `_build_anthropic_kwargs`, the one method that sees the converted messages, and turns each such block back into `{"type": "thinking", "thinking": "", "signature": …}`. That is safe because `ClaudeModel` fails any reply that holds real redacted thinking. Summarized display makes empty text rare; the override covers the rest.
+2. **Unusable replies fail the part.** `STOP` is normal. `MAX_TOKENS` raises `AgentFailure` with `max-tokens`. `SAFETY` raises `refused`. Claude Sonnet 5.5 offers a server-side fallback to Claude Sonnet 5 for some refusals; the tool doesn't use it. Any other finish reason, or a thought part without text (redacted thinking), raises `invalid-model-output` rather than dropping the block silently.
 
 The tools adapt to ADK's tool results ([agent tools contract](contracts/agent-tools.md)): refusals carry `is_error: true`, and no result has a `content` field, because ADK would send that string alone and drop the rest, such as `read_file`'s `version`.
 
-**Rationale**: ADK 2.14 ships two classes on the `anthropic` SDK. `AnthropicLlm` calls the Claude API directly; its subclass `Claude` goes through Vertex AI. An earlier draft of this plan assumed ADK reached Claude only through Vertex AI and wrote its own `BaseLlm` subclass with its own conversion. `AnthropicLlm` makes that unnecessary: ADK maintains the conversion, including tool IDs, thinking signatures, cache breakpoints, and usage. Given our client, it keeps the SDK's credential chain: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_PROFILE`, workload identity, then the active `ant auth login` profile. Claude Haiku 5.5 thinks by default and needs thinking blocks passed back unchanged with tool results. ADK keeps thought parts and their signatures in session history; a contract test runs the real ADK `Runner` against a fake Messages API and asserts the second request carries the first reply's thinking block and signature, with text and with empty text.
+**Rationale**: ADK 2.14 ships two classes on the `anthropic` SDK. `AnthropicLlm` calls the Claude API directly; its subclass `Claude` goes through Vertex AI. An earlier draft of this plan assumed ADK reached Claude only through Vertex AI and wrote its own `BaseLlm` subclass with its own conversion. `AnthropicLlm` makes that unnecessary: ADK maintains the conversion, including tool IDs, thinking signatures, cache breakpoints, and usage. Given our client, it keeps the SDK's credential chain: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_PROFILE`, workload identity, then the active `ant auth login` profile. Claude Sonnet 5.5 thinks by default and needs thinking blocks passed back unchanged with tool results. ADK keeps thought parts and their signatures in session history; a contract test runs the real ADK `Runner` against a fake Messages API and asserts the second request carries the first reply's thinking block and signature, with text and with empty text.
 
-Caching: the system prompt and tool definitions are identical for every analysis, so their breakpoints let parallel analyses share them, and the breakpoint at the end of the conversation covers each loop's growing history. Claude Haiku 5.5 caches prefixes of 512 tokens or more; cache reads cost 0.1× the input rate and 5-minute writes 1.25×.
+Caching: the system prompt and tool definitions are identical for every analysis, so their breakpoints let parallel analyses share them, and the breakpoint at the end of the conversation covers each loop's growing history. Claude Sonnet 5.5 caches prefixes of 512 tokens or more; cache reads cost 0.05× the input rate and 5-minute writes 1.25×.
 
 Retries: the SDK retries 408, 409, 429, 5xx (529 is the overload response), timeouts, and connection errors with backoff, honoring `retry-after`. `max_retries=3` gives the spec's "up to 3 times" for rate limits, overloads, and timeouts. The other retried classes are a superset that costs nothing extra: a failed request isn't billed, and the Messages API has no side effects to duplicate. ADK re-raises the SDK's `RateLimitError` as a subclass with a longer message, so checks with `isinstance` still match.
 
@@ -65,13 +65,13 @@ Accepted cost: ADK escapes non-ASCII characters in tool results (`ü` becomes `\
 
 ## R4. Model, prices, and cost
 
-**Decision**: Claude Haiku 5.5 (`claude-haiku-5-5`) for analyses and the organizer, as the spec assumes. `ClaudeModel` computes each response's cost from the usage ADK reports on the `LlmResponse`: `usage_metadata.prompt_token_count` (input, cache writes, and cache reads together), `usage_metadata.cached_content_token_count` (cache reads), `cache_creation_token_count` (cache writes), and output as `candidates_token_count` plus `thoughts_token_count`. In the API's terms:
+**Decision**: Claude Sonnet 5.5 (`claude-sonnet-5-5`) for analyses and the organizer, as the spec assumes. `ClaudeModel` computes each response's cost from the usage ADK reports on the `LlmResponse`: `usage_metadata.prompt_token_count` (input, cache writes, and cache reads together), `usage_metadata.cached_content_token_count` (cache reads), `cache_creation_token_count` (cache writes), and output as `candidates_token_count` plus `thoughts_token_count`. In the API's terms:
 
 ```
 prompt   = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
-rate     = $0.10 / $0.50 per million input / output tokens if prompt ≤ 100,000, else $0.50 / $2.50
-cost     = input_tokens × in + cache_creation_input_tokens × in × 1.25
-         + cache_read_input_tokens × in × 0.1 + output_tokens × out
+rate     = $2.00 / $10.00 per million input / output tokens, at any prompt length
+cost     = input_tokens × in + cache_creation_input_tokens × $2.50
+         + cache_read_input_tokens × $0.10 + output_tokens × out
 ```
 
 Thinking tokens are billed as output and are included in `output_tokens`. Prices live in one table in `agents/budget.py` with the date they were checked. Before release, the implementer checks them against Anthropic's live pricing page.
@@ -84,7 +84,7 @@ Thinking tokens are billed as output and are included in `output_tokens`. Prices
 
 **Decision**: Estimated tokens = ⌈characters ÷ 3⌉ of the rendered text. Part size stays at 40,000 estimated tokens and the skip threshold at 400,000, as the spec sets them.
 
-**Rationale**: The spec's four-characters-per-token figure came from a measurement on the user's machine. Anthropic's migration notes say Claude Haiku 5.5's tokenizer counts the same text as about 30% more tokens than Claude Haiku 4.5's. Three characters per token keeps the estimate on the high side, so a 40,000-token part stays well below the 100,000-token price step once the instructions, memory reads, and replies are added. The cost is about a third more parts than four characters per token would give. On the user's 61 sessions this moves the largest view from about 241,000 to about 321,000 estimated tokens, still under the 400,000 skip threshold. The eval measures the real ratio from the first request of each part (`usage` against the estimate) and prints it, so the divisor can be corrected with data.
+**Rationale**: The spec's four-characters-per-token figure came from a measurement on the user's machine. Anthropic's migration notes say Claude Haiku 5.5's tokenizer counts the same text as about 30% more tokens than Claude Haiku 4.5's. Three characters per token keeps the estimate on the high side, so a 40,000-token part stays well below the 100,000-token request limit once the instructions, memory reads, and replies are added. The figure was chosen for Claude Haiku 5.5, which the tool used first, and has not been measured on Claude Sonnet 5.5. The cost is about a third more parts than four characters per token would give. On the user's 61 sessions this moves the largest view from about 241,000 to about 321,000 estimated tokens, still under the 400,000 skip threshold. The eval measures the real ratio from the first request of each part (`usage` against the estimate) and prints it, so the divisor can be corrected with data.
 
 **Alternatives considered**: Four characters per token with a smaller part size (same effect, but the preview's numbers would understate cost). A real tokenizer (none is published for Claude; `count_tokens` is a network call).
 
@@ -113,7 +113,7 @@ A Codex file whose `session_meta` has `parent_thread_id` is skipped as a subthre
 
 **Rationale**: The examples show both tools inject instruction files as user-role content. Codex's `UserMessage` items and Claude Code's `origin.kind: "human"` mark what the user typed; the examples confirm both. Compaction records and multi-turn Codex sessions aren't covered by the examples; the parsers handle them as described in the contract, without tests on real files (the spec lists this as out of scope).
 
-**Alternatives considered**: Filtering Codex `response_item` user messages by text prefix (fragile; the `UserMessage` items already separate typed input). Including model reasoning (Codex stores it encrypted; Claude Haiku's job is the outcome, and the spec leaves reasoning out).
+**Alternatives considered**: Filtering Codex `response_item` user messages by text prefix (fragile; the `UserMessage` items already separate typed input). Including model reasoning (Codex stores it encrypted; the analysis's job is the outcome, and the spec leaves reasoning out).
 
 ## R8. Finding and selecting sessions
 

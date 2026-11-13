@@ -20,7 +20,7 @@ ADK runs each agent: one `LlmAgent` under a `Runner` per session part, and one f
 
 ADK's `AnthropicLlm` sends every model call through `AsyncAnthropic.messages.create` and does the conversion. `ClaudeModel` (`agents/claude_model.py`), a thin subclass, sets the model and output limit and changes two things:
 
-- ADK sends a signed thinking block with empty text back as redacted thinking with the signature as its data. Claude Haiku 5.5 omits thinking text unless asked for summaries, and the API needs the block back unchanged. `ClaudeModel` restores the thinking block by overriding ADK's private `_build_anthropic_kwargs`. Real redacted thinking fails the part instead, so the two can't be confused.
+- ADK sends a signed thinking block with empty text back as redacted thinking with the signature as its data. Claude Sonnet 5.5 omits thinking text unless asked for summaries, and the API needs the block back unchanged. `ClaudeModel` restores the thinking block by overriding ADK's private `_build_anthropic_kwargs`. Real redacted thinking fails the part instead, so the two can't be confused.
 - Refusals and truncated or unmappable replies raise `AgentFailure` with a reason from the failure enum.
 
 The agents get adaptive thinking at medium effort through `AnthropicGenerateContentConfig`, and prompt caching through the app's `ContextCacheConfig`. Tools mark refusals with `is_error: true`, which ADK passes on as a tool error. Each client has a 300-second timeout and up to 3 retries.

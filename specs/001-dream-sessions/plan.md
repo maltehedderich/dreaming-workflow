@@ -6,7 +6,7 @@
 
 ## Summary
 
-Build `dream`, a Python CLI that reads finished Claude Code and Codex sessions, sends each one's conversation to Claude Haiku 5.5 for analysis, runs one organizer pass, checks the memory format, and prints a report built from its own records.
+Build `dream`, a Python CLI that reads finished Claude Code and Codex sessions, sends each one's conversation to Claude Sonnet 5.5 for analysis, runs one organizer pass, checks the memory format, and prints a report built from its own records.
 
 ADK runs each analysis and the organizer as a single `LlmAgent` under a `Runner`. ADK's own `AnthropicLlm` sends every model call to the Claude API through the official `anthropic` SDK. A thin subclass, `ClaudeModel`, sets the model, sends signed thinking blocks with empty text back unchanged, and turns unusable replies into failures. Plain asyncio code runs the fixed sequence: groups of at most 20 sessions, parts in order, then the organizer. There is no lead agent.
 

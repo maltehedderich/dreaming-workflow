@@ -33,8 +33,8 @@ from tests.support.sessions import ClaudeCodeSession
 
 DAY = datetime(2026, 11, 2, 8, 0, tzinfo=UTC)
 PROJECT = "/Users/dev/Projects/app"
-# 10,000 input tokens at US$0.10 per million cost US$0.001.
-ONE_TENTH_CENT: JsonObject = {"input_tokens": 10_000, "output_tokens": 0}
+# 10,000 input tokens at US$2.00 per million cost US$0.02.
+TWO_CENTS: JsonObject = {"input_tokens": 10_000, "output_tokens": 0}
 _SESSION_ID = re.compile(r"Session ID: ([0-9a-f-]{36})")
 
 
@@ -65,16 +65,16 @@ def session_of(body: JsonObject) -> str | None:
 
 def responder(first_session: str) -> Responder:
     """The first session ends its turn at once; every other session reads the
-    index first. Every response costs US$0.001."""
+    index first. Every response costs US$0.02."""
 
     def respond(body: JsonObject) -> FakeReply:
         session = session_of(body)
         if session is None or session == first_session or has_tool_result(body):
-            return MessageReply([text_block("Done.")], usage=ONE_TENTH_CENT)
+            return MessageReply([text_block("Done.")], usage=TWO_CENTS)
         return MessageReply(
             [tool_use_block(f"toolu_{session[-4:]}", "read_index", {})],
             stop_reason="tool_use",
-            usage=ONE_TENTH_CENT,
+            usage=TWO_CENTS,
         )
 
     return respond
@@ -111,7 +111,7 @@ def test_the_limit_stops_analyses_and_lets_the_organizer_run(
     ]
 
     exit_code = cli.main(
-        [*arguments, "--spending-limit", "0.005"],
+        [*arguments, "--spending-limit", "0.10"],
         model_factory=model_for,
         now=RUN_START,
     )
@@ -123,7 +123,7 @@ def test_the_limit_stops_analyses_and_lets_the_organizer_run(
     # The first session succeeded, so the organizer ran and sent a request.
     assert None in sent_for
     assert re.search(r"^Organizer +ran and succeeded$", report, re.MULTILINE)
-    assert re.search(r"^  spending limit +US\$0\.005, reached$", report, re.MULTILINE)
+    assert re.search(r"^  spending limit +US\$0\.10, reached$", report, re.MULTILINE)
 
     sessions = DreamRecord.load(memory).sessions
     outcomes = {record.session_id: record for record in sessions.values()}
