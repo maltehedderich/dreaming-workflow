@@ -4,9 +4,12 @@ ADK's Claude model sends a result's `content` string alone when it has one, so
 no result uses that key; every other result goes to the model as JSON.
 """
 
+import json
 from collections.abc import Callable
 
-from dreaming_workflow.memory import MemoryStore, Refusal, Slug
+from dreaming_workflow.agents.budget import ContextGuard
+from dreaming_workflow.memory import MemoryStore, Refusal, SearchResult, Slug, Writer
+from dreaming_workflow.sessions.view import estimate_tokens
 
 type ToolResult = dict[str, object]
 type ToolFunction = Callable[..., ToolResult]
@@ -21,10 +24,45 @@ def _refused(refusal: Refusal) -> ToolResult:
     return refused(refusal.reason)
 
 
+def _estimate(result: ToolResult) -> int:
+    return estimate_tokens(json.dumps(result))
+
+
 def analyzer_tools(
-    store: MemoryStore, on_write: Callable[[Slug], None]
+    store: MemoryStore,
+    writer: Writer,
+    guard: ContextGuard,
+    on_write: Callable[[Slug], None],
 ) -> list[ToolFunction]:
-    """The analyzer's tools. `on_write` receives each slug the analysis writes."""
+    """The analyzer's tools for one part.
+
+    Writes go to the store as `writer`. Every result counts toward `guard`'s
+    projected prompt, and reads that would pass its budget are refused.
+    `on_write` receives each slug the analysis writes.
+    """
+
+    def sent(result: ToolResult) -> ToolResult:
+        guard.add_pending(_estimate(result))
+        return result
+
+    def within_budget(result: ToolResult, what: str, hint: str = "") -> ToolResult:
+        tokens = _estimate(result)
+        room = guard.room_for_read(tokens)
+        if room is None:
+            return sent(result)
+        return sent(
+            refused(
+                f"{what} is about {tokens:,} tokens, and this conversation has room "
+                f"for about {room:,} more. {hint}Finish with what you have."
+            )
+        )
+
+    def written(slug: str, result: str | Refusal) -> ToolResult:
+        if isinstance(result, Refusal):
+            return sent(_refused(result))
+        # The store accepted the slug, so it is valid.
+        on_write(Slug(slug))
+        return sent({"status": "ok", "version": result})
 
     def read_index() -> ToolResult:
         """Read the memory index, _index.md.
@@ -38,8 +76,27 @@ def analyzer_tools(
         """
         content = store.read_index()
         if isinstance(content, Refusal):
-            return _refused(content)
-        return {"status": "ok", "text": content}
+            return sent(_refused(content))
+        return within_budget({"status": "ok", "text": content}, "The index")
+
+    def search_memory(text: str) -> ToolResult:
+        """Find lines in memory files that contain some text, ignoring case.
+
+        Use it to check whether memory already holds a fact before reading
+        whole files.
+
+        Args:
+          text: Literal text to look for, such as a tool name or identifier.
+
+        Returns:
+          {"status": "ok", "matches": [{"slug": <slug>, "line": <number>,
+          "excerpt": <the line, cut to 300 characters>}], "truncated": <true if
+          there were more than 50 matches>}
+        """
+        result = store.search_memory(text)
+        if isinstance(result, Refusal):
+            return sent(_refused(result))
+        return within_budget(_search_result(result), "The search result")
 
     def read_file(
         slug: str, start_line: int = 1, max_lines: int | None = None
@@ -56,13 +113,17 @@ def analyzer_tools(
         """
         result = store.read_file(slug, start_line, max_lines)
         if isinstance(result, Refusal):
-            return _refused(result)
-        return {
-            "status": "ok",
-            "text": result.content,
-            "version": result.version,
-            "total_lines": result.total_lines,
-        }
+            return sent(_refused(result))
+        return within_budget(
+            {
+                "status": "ok",
+                "text": result.content,
+                "version": result.version,
+                "total_lines": result.total_lines,
+            },
+            "That part of the file",
+            hint="Read fewer lines with start_line and max_lines, or ",
+        )
 
     def create_file(
         slug: str,
@@ -74,7 +135,7 @@ def analyzer_tools(
     ) -> ToolResult:
         """Create a new memory file and list it in the index.
 
-        Refused if the slug already exists; read that file instead.
+        Refused if the slug already exists; read that file and edit it instead.
 
         Args:
           slug: Lowercase letters and digits in hyphen-separated groups, at most
@@ -90,13 +151,59 @@ def analyzer_tools(
         Returns:
           {"status": "ok", "version": <token>}
         """
-        result = store.create_file(
-            slug, description, body, domain, subdomain, index_sentence
+        return written(
+            slug,
+            store.create_file(
+                slug, description, body, domain, subdomain, index_sentence, writer
+            ),
         )
-        if isinstance(result, Refusal):
-            return _refused(result)
-        # The store accepted the slug, so it is valid.
-        on_write(Slug(slug))
-        return {"status": "ok", "version": result}
 
-    return [read_index, read_file, create_file]
+    def edit_file(slug: str, old_text: str, new_text: str) -> ToolResult:
+        """Replace text in a memory file.
+
+        `old_text` must occur exactly once in the file's current content; copy
+        it from read_file, with enough surrounding text to make it unique.
+
+        Args:
+          slug: The file's slug.
+          old_text: The exact text to replace.
+          new_text: The text to put in its place.
+
+        Returns:
+          {"status": "ok", "version": <token>}
+        """
+        return written(slug, store.edit_file(slug, old_text, new_text, writer))
+
+    def append_to_file(slug: str, text: str) -> ToolResult:
+        """Add text to the end of a memory file, such as new facts.
+
+        A newline is added first if the file doesn't end with one.
+
+        Args:
+          slug: The file's slug.
+          text: The text to add.
+
+        Returns:
+          {"status": "ok", "version": <token>}
+        """
+        return written(slug, store.append_to_file(slug, text, writer))
+
+    return [
+        read_index,
+        search_memory,
+        read_file,
+        create_file,
+        edit_file,
+        append_to_file,
+    ]
+
+
+def _search_result(result: SearchResult) -> ToolResult:
+    return {
+        "status": "ok",
+        "matches": [
+            {"slug": match.slug, "line": match.line, "excerpt": match.excerpt}
+            for match in result.matches
+        ],
+        "truncated": result.truncated,
+    }

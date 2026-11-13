@@ -34,7 +34,14 @@ class WaitFor:
     event: asyncio.Event
 
 
-type Step = CallTool | FinalText | WaitFor | AgentFailure
+@dataclass(frozen=True)
+class Signal:
+    """Set the event, then go on to the next step."""
+
+    event: asyncio.Event
+
+
+type Step = CallTool | FinalText | WaitFor | Signal | AgentFailure
 
 
 class ScriptedLlm(BaseLlm):
@@ -81,6 +88,8 @@ class ScriptedLlm(BaseLlm):
             match step:
                 case WaitFor():
                     await step.event.wait()
+                case Signal():
+                    step.event.set()
                 case AgentFailure():
                     raise step
                 case CallTool():
@@ -137,3 +146,20 @@ class ScriptedModels:
             ):
                 return llm
         raise AssertionError(f"session {session_id} part {part_index} never ran")
+
+
+def create_file_call(
+    slug: str, body: str, domain: str = "Development", sentence: str | None = None
+) -> CallTool:
+    """A `create_file` call with a description and index sentence made from the slug."""
+    return CallTool(
+        "create_file",
+        {
+            "slug": slug,
+            "description": f"Facts about {slug}.",
+            "body": body,
+            "domain": domain,
+            "subdomain": None,
+            "index_sentence": sentence or f"Facts about {slug}.",
+        },
+    )

@@ -57,7 +57,14 @@ def test_one_session_becomes_one_memory_file(
     )
 
     exit_code = cli.main(
-        ["--memory", str(memory), "--session", str(session_file)],
+        [
+            "--memory",
+            str(memory),
+            "--since",
+            "2026-10-01",
+            "--session",
+            str(session_file),
+        ],
         model_factory=models,
         now=RUN_START,
     )
@@ -94,5 +101,7 @@ def test_one_session_becomes_one_memory_file(
     assert TYPED_PROMPT in data.group(2)
 
     report = capsys.readouterr().out
-    assert re.search(r"^  analyzed +1$", report, re.MULTILINE)
-    assert re.search(r"^  files +1 created$", report, re.MULTILINE)
+    assert re.search(r"^  analyzed +1  \(", report, re.MULTILINE)
+    assert re.search(
+        r"^  files +1 created, 0 changed, 0 retired$", report, re.MULTILINE
+    )

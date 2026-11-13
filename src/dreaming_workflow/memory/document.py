@@ -2,10 +2,13 @@ import hashlib
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import NewType
 
 import yaml
+
+from dreaming_workflow.sessions import Tool
 
 Slug = NewType("Slug", str)
 
@@ -14,6 +17,12 @@ _SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 _SLUG_PATTERN = re.compile(_SLUG)
 _LINK_PATTERN = re.compile(rf"\[\[({_SLUG})\]\]")
 _STUB_PATTERN = re.compile(rf"MOVED TO \[\[{_SLUG}\]\]\n?")
+_CITATION_TIME = "%Y-%m-%d %H:%M"
+_CITATION_PATTERN = re.compile(
+    r"\[source: (claude-code|codex) ([^\s\]·]+) · ([^\]\n]+?) · "
+    r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC\]"
+)
+_CONFLICT_PREFIX = "- CONFLICT:"
 _FRONTMATTER_KEYS = frozenset({"name", "description", "metadata"})
 _FENCE = "---"
 
@@ -115,3 +124,38 @@ def is_stub(data: bytes) -> bool:
 
 def links(text: str) -> list[Slug]:
     return [Slug(match) for match in _LINK_PATTERN.findall(text)]
+
+
+@dataclass(frozen=True)
+class Citation:
+    """Where a fact came from. Equal when tool, session, project, and minute match."""
+
+    tool: Tool
+    session_id: str
+    project_dir: str
+    at: datetime
+
+    def render(self) -> str:
+        return (
+            f"[source: {self.tool} {self.session_id} · {self.project_dir} · "
+            f"{self.at.astimezone(UTC):{_CITATION_TIME}} UTC]"
+        )
+
+
+def citations(text: str) -> set[Citation]:
+    found: set[Citation] = set()
+    for tool, session_id, project_dir, at in _CITATION_PATTERN.findall(text):
+        try:
+            minute = datetime.strptime(at, _CITATION_TIME).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+        found.add(Citation(Tool(tool), session_id, project_dir, minute))
+    return found
+
+
+def conflict_lines(text: str) -> set[str]:
+    return {
+        stripped
+        for line in text.splitlines()
+        if (stripped := line.strip()).startswith(_CONFLICT_PREFIX)
+    }

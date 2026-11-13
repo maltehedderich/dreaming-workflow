@@ -1,8 +1,23 @@
+"""The run report, built only from the run's own records, never from logs or content."""
+
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import StrEnum
+from pathlib import Path
 
 from dreaming_workflow.agents import AnalysisResult, AnalysisStatus, FailureReason
-from dreaming_workflow.sessions import Tool
+from dreaming_workflow.agents.budget import UsageLedger
+from dreaming_workflow.memory import MemorySnapshot
+from dreaming_workflow.memory.index import IndexParseError, parse_index
+from dreaming_workflow.sessions import (
+    Selected,
+    SelectionDecision,
+    Skipped,
+    SkipReason,
+    Tool,
+)
 
 
 class RunOutcome(StrEnum):
@@ -29,33 +44,124 @@ class FailedSession:
 
 
 @dataclass(frozen=True)
-class Report:
-    """What a run did, built only from its own records, never from logs or content."""
+class IndexStats:
+    entries: int
+    domains: int
+    subdomains: int
 
+
+@dataclass(frozen=True)
+class FileChanges:
+    created: int
+    changed: int
+    retired: int
+
+
+@dataclass(frozen=True)
+class Usage:
+    """Token counts and cost at list price. `input_tokens` counts every input token."""
+
+    input_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    output_tokens: int
+    cost_usd: Decimal
+
+
+@dataclass(frozen=True)
+class Report:
     run_id: str
-    skipped: int
+    found: int
+    selected: int
+    # In SkipReason order, only reasons that occurred.
+    skipped_by_reason: tuple[tuple[SkipReason, int], ...]
     analyzed: int
+    analyzed_in_parts: int
     failed: tuple[FailedSession, ...]
-    files_created: int
+    # None when _index.md can't be parsed.
+    index: IndexStats | None
+    files: FileChanges
+    conflicts_added: int
+    usage: Usage
+    # None when the run wrote nothing, so no copy was made.
+    backup_path: Path | None
+
+    @property
+    def skipped(self) -> int:
+        return sum(count for _, count in self.skipped_by_reason)
 
     @property
     def outcome(self) -> RunOutcome:
         return RunOutcome.COMPLETED_WITH_FAILURES if self.failed else RunOutcome.SUCCESS
 
 
-def build_report(run_id: str, skipped: int, results: list[AnalysisResult]) -> Report:
-    failed = tuple(
-        FailedSession(
-            result.session.tool, result.session.session_id, result.failure.reason
-        )
-        for result in results
-        if result.failure is not None
+def index_stats(index_text: str) -> IndexStats | None:
+    index = parse_index(index_text)
+    if isinstance(index, IndexParseError):
+        return None
+    return IndexStats(
+        entries=len(index.slugs()),
+        domains=len(index.domains),
+        subdomains=sum(len(domain.subdomains) for domain in index.domains),
     )
-    created = set[str]().union(*(result.slugs_written for result in results))
+
+
+def file_changes(start: MemorySnapshot, end: MemorySnapshot) -> FileChanges:
+    retired = {
+        slug for slug in start.hashes if slug not in start.stubs and slug in end.stubs
+    }
+    changed = {
+        slug
+        for slug, digest in end.hashes.items()
+        if slug in start.hashes and start.hashes[slug] != digest
+    } - retired
+    created = end.hashes.keys() - start.hashes.keys()
+    return FileChanges(created=len(created), changed=len(changed), retired=len(retired))
+
+
+def usage_of(ledger: UsageLedger) -> Usage:
+    return Usage(
+        input_tokens=ledger.prompt_tokens,
+        cache_read_tokens=ledger.cache_read_tokens,
+        cache_write_tokens=ledger.cache_write_tokens,
+        output_tokens=ledger.output_tokens,
+        cost_usd=ledger.cost_usd,
+    )
+
+
+def build_report(
+    *,
+    run_id: str,
+    decisions: Sequence[SelectionDecision],
+    results: Sequence[AnalysisResult],
+    start: MemorySnapshot,
+    end: MemorySnapshot,
+    index: IndexStats | None,
+    ledger: UsageLedger,
+    backup_path: Path | None,
+) -> Report:
+    skip_counts = Counter(d.reason for d in decisions if isinstance(d, Skipped))
+    analyzed = [r for r in results if r.status is AnalysisStatus.ANALYZED]
+    failed = tuple(
+        FailedSession(r.session.tool, r.session.session_id, r.failure.reason)
+        for r in results
+        if r.failure is not None
+    )
     return Report(
         run_id=run_id,
-        skipped=skipped,
-        analyzed=sum(result.status is AnalysisStatus.ANALYZED for result in results),
+        found=len(decisions),
+        selected=sum(isinstance(d, Selected) for d in decisions),
+        skipped_by_reason=tuple(
+            (reason, skip_counts[reason])
+            for reason in SkipReason
+            if skip_counts[reason]
+        ),
+        analyzed=len(analyzed),
+        analyzed_in_parts=sum(r.parts_run > 1 for r in analyzed),
         failed=failed,
-        files_created=len(created),
+        index=index,
+        files=file_changes(start, end),
+        conflicts_added=len(end.conflicts - start.conflicts),
+        usage=usage_of(ledger),
+        backup_path=backup_path,
     )

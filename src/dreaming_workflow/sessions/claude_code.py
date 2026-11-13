@@ -1,7 +1,14 @@
 import json
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import datetime
 
+from dreaming_workflow.sessions.jsonl import (
+    IMAGE_TEXT,
+    UNKNOWN_PROJECT_DIR,
+    Record,
+    parse_timestamp,
+    read_records,
+)
 from dreaming_workflow.sessions.model import Session, SessionFile, Tool
 from dreaming_workflow.sessions.view import (
     ConversationMessage,
@@ -23,34 +30,6 @@ HARNESS_TAGS = (
     "<system-reminder>",
     "<task-notification>",
 )
-IMAGE_TEXT = "[image]"
-UNKNOWN_PROJECT_DIR = "unknown"
-
-type Record = dict[str, object]
-
-
-def read_records(file: SessionFile) -> Iterator[Record]:
-    """Yield each line that parses as a JSON object; skip the rest, such as a partial last line."""
-    with file.path.open("rb") as lines:
-        for line in lines:
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(record, dict):
-                yield record
-
-
-def parse_timestamp(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
 
 
 def _is_typed_by_user(record: Record) -> bool:

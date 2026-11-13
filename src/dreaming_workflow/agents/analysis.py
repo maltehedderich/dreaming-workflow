@@ -3,15 +3,20 @@ from collections.abc import Callable
 from datetime import datetime
 from importlib import resources
 
+from google.adk.agents.invocation_context import LlmCallsLimitExceededError
+
+from dreaming_workflow.agents.budget import ContextGuard, UsageLedger
 from dreaming_workflow.agents.invocation import AgentRole, Invocation, ModelFactory
 from dreaming_workflow.agents.results import (
     AgentFailure,
     AnalysisResult,
     AnalysisStatus,
+    Failure,
+    FailureReason,
 )
 from dreaming_workflow.agents.runner import run_agent
 from dreaming_workflow.agents.tools import analyzer_tools
-from dreaming_workflow.memory import MemoryStore, Slug
+from dreaming_workflow.memory import MemoryStore, Slug, Writer
 from dreaming_workflow.sessions import Part, Session, render
 
 MAX_LLM_CALLS_PER_PART = 40
@@ -53,33 +58,75 @@ async def _run_part(
     part: Part,
     store: MemoryStore,
     model_factory: ModelFactory,
+    ledger: UsageLedger,
     on_write: Callable[[Slug], None],
 ) -> None:
-    invocation = Invocation(AgentRole.ANALYSIS, session.session_id, part.index)
+    guard = ContextGuard()
+    invocation = Invocation(
+        AgentRole.ANALYSIS, session.session_id, part.index, guard=guard, ledger=ledger
+    )
+    writer = Writer.analysis(
+        session.tool,
+        session.session_id,
+        session.project_dir,
+        part.first_at,
+        part.last_at,
+    )
     await run_agent(
         name="analyzer",
         model=model_factory(invocation),
         instruction=_analyzer_instruction(),
-        tools=analyzer_tools(store, on_write),
+        tools=analyzer_tools(store, writer, guard, on_write),
         message=first_message(session, part, secrets.token_hex(16)),
         max_llm_calls=MAX_LLM_CALLS_PER_PART,
     )
 
 
+async def _part_failure(
+    session: Session,
+    part: Part,
+    store: MemoryStore,
+    model_factory: ModelFactory,
+    ledger: UsageLedger,
+    on_write: Callable[[Slug], None],
+) -> Failure | None:
+    """Run one part and return why it failed, or None if it succeeded."""
+    try:
+        await _run_part(session, part, store, model_factory, ledger, on_write)
+    except AgentFailure as failure:
+        return failure.failure
+    except LlmCallsLimitExceededError:
+        return Failure(FailureReason.TURN_LIMIT)
+    # One part's unexpected error fails its session, not the run. Only the
+    # class name is kept: messages can quote session or memory content.
+    except Exception as error:  # noqa: BLE001
+        return Failure(FailureReason.INTERNAL_ERROR, type(error).__name__)
+    return None
+
+
 async def analyze_session(
-    session: Session, parts: list[Part], store: MemoryStore, model_factory: ModelFactory
+    session: Session,
+    parts: tuple[Part, ...],
+    store: MemoryStore,
+    model_factory: ModelFactory,
+    ledger: UsageLedger,
 ) -> AnalysisResult:
+    """Analyze a session's parts in order, stopping at the first that fails.
+
+    Facts written by earlier parts stay in memory when a later part fails.
+    """
     slugs_written: set[Slug] = set()
     parts_run = 0
     for part in parts:
         parts_run += 1
-        try:
-            await _run_part(session, part, store, model_factory, slugs_written.add)
-        except AgentFailure as failure:
+        failure = await _part_failure(
+            session, part, store, model_factory, ledger, slugs_written.add
+        )
+        if failure is not None:
             return AnalysisResult(
                 session=session,
                 status=AnalysisStatus.FAILED,
-                failure=failure.failure,
+                failure=failure,
                 parts_run=parts_run,
                 slugs_written=frozenset(slugs_written),
             )

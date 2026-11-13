@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from dreaming_workflow.memory import FileLines, MemoryStore, Refusal
+from tests.support.memory import analysis_writer
 
 BODY = "# uv\n\n- Python work uses uv.\n"
 
@@ -22,7 +23,13 @@ def create(
     index_sentence: str = "Python work uses uv.",
 ) -> str | Refusal:
     return store.create_file(
-        slug, description, body, "Development", subdomain, index_sentence
+        slug,
+        description,
+        body,
+        "Development",
+        subdomain,
+        index_sentence,
+        analysis_writer(),
     )
 
 

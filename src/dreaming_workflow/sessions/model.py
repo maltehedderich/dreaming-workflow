@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from dreaming_workflow.sessions.view import ConversationView
+from dreaming_workflow.sessions.view import ConversationView, Part
 
 
 class Tool(StrEnum):
@@ -41,3 +41,30 @@ class Session:
     last_activity_at: datetime
     parent_thread_id: str | None
     view: ConversationView
+
+
+class SkipReason(StrEnum):
+    UNRECOGNIZED = "unrecognized"
+    SUBTHREAD = "subthread"
+    SUBAGENT = "subagent"
+    NO_CONVERSATION = "no-conversation"
+    OUTSIDE_WINDOW = "outside-window"
+    ACTIVE = "active"
+    TOO_LARGE = "too-large"
+
+
+@dataclass(frozen=True)
+class Selected:
+    session: Session
+    parts: tuple[Part, ...]
+
+
+@dataclass(frozen=True)
+class Skipped:
+    file: SessionFile
+    reason: SkipReason
+    # The estimated size for a too-large session; empty otherwise.
+    detail: str = ""
+
+
+type SelectionDecision = Selected | Skipped
