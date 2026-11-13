@@ -32,10 +32,10 @@ class PriceTable:
     long_prompt_threshold: int
 
 
-# List prices from Anthropic's pricing reference dated 2026-11-03.
+# List prices from https://platform.claude.com/docs/en/about-claude/pricing.
 PRICES = PriceTable(
     model="claude-haiku-5-5",
-    checked_on=date(2026, 11, 11),
+    checked_on=date(2026, 11, 13),
     standard=Rates(input=Decimal("0.10"), output=Decimal("0.50")),
     long_prompt=Rates(input=Decimal("0.50"), output=Decimal("2.50")),
     long_prompt_threshold=100_000,

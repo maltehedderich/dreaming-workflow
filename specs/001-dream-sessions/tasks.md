@@ -226,11 +226,11 @@ description: "Task list for Dream over Claude Code and Codex sessions"
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T116 [P] Update `README.md`: replace the "Nothing runs yet" status, rename "Requirements (planned)" to "Requirements", and add a short Usage section with `dream --memory DIR`, `--preview`, `--spending-limit`, where run state and pre-run copies live, and how to restore a copy by hand.
-- [ ] T117 [P] Check the price table in `src/dreaming_workflow/agents/budget.py` against Anthropic's live pricing page, and update the values and the checked date. If the prices change, update the expected values in `tests/unit/agents/test_budget.py` from the new prices, computed by hand.
+- [X] T116 [P] Update `README.md`: replace the "Nothing runs yet" status, rename "Requirements (planned)" to "Requirements", and add a short Usage section with `dream --memory DIR`, `--preview`, `--spending-limit`, where run state and pre-run copies live, and how to restore a copy by hand.
+- [X] T117 [P] Check the price table in `src/dreaming_workflow/agents/budget.py` against Anthropic's live pricing page, and update the values and the checked date. If the prices change, update the expected values in `tests/unit/agents/test_budget.py` from the new prices, computed by hand.
 - [ ] T118 Run quickstart.md steps 1–7 by hand with credentials, and record exit codes, counts, the first run's duration (under 10 minutes), and the repeat run's duration (under 10 seconds) in the PR description.
-- [ ] T119 Search `src/` and `tests/` for references to spec, plan, or task IDs (`grep -rnE '\b(FR|SC)-[0-9]{3}\b|\bT[0-9]{3}\b|\bUS[0-9]\b|User Story' src tests`) and rewrite each hit to state the behavior.
-- [ ] T120 If `uv.lock` changed since T005, re-run the `pip-audit` audit and update ADR 0001. Run `mise run check` and confirm CI passes.
+- [X] T119 Search `src/` and `tests/` for references to spec, plan, or task IDs (`grep -rnE '\b(FR|SC)-[0-9]{3}\b|\bT[0-9]{3}\b|\bUS[0-9]\b|User Story' src tests`) and rewrite each hit to state the behavior.
+- [X] T120 If `uv.lock` changed since T005, re-run the `pip-audit` audit and update ADR 0001. Run `mise run check` and confirm CI passes.
 
 ---
 
