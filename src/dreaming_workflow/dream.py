@@ -75,6 +75,8 @@ class RunOptions:
 class RunResult:
     report: Report
     outcome: RunOutcome
+    # Carries which files the organizer read, for evals; never rendered.
+    organizer: OrganizerResult
 
 
 @dataclass(frozen=True)
@@ -262,10 +264,9 @@ async def _run_locked(
         )
 
     if not selected and not record.waiting_files:
-        report = report_for(
-            [], OrganizerResult(OrganizerStatus.NOT_RUN), [], nothing_to_dream=True
-        )
-        return RunResult(report=report, outcome=report.outcome)
+        not_run = OrganizerResult(OrganizerStatus.NOT_RUN)
+        report = report_for([], not_run, [], nothing_to_dream=True)
+        return RunResult(report=report, outcome=report.outcome, organizer=not_run)
 
     async def analyze(decision: Selected) -> AnalysisResult:
         result = await analyze_session(
@@ -300,4 +301,4 @@ async def _run_locked(
     )
     progress("Checking memory format")
     report = report_for(results, organizer, check_format(options.memory_dir))
-    return RunResult(report=report, outcome=report.outcome)
+    return RunResult(report=report, outcome=report.outcome, organizer=organizer)

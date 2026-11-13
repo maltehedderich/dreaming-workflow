@@ -2,6 +2,7 @@ import pytest
 
 from dreaming_workflow.memory.secrets import CredentialFamily, find_credentials
 from tests.support.examples import CONTEXT7_CHECK
+from tests.support.sessions import fake_credentials
 
 # Every fake credential is joined from fragments at run time, so no file in the
 # repository holds a string that matches a credential pattern.
@@ -41,6 +42,15 @@ def test_fake_credential_is_detected(family: CredentialFamily) -> None:
     text = f"The setup used {FAKE_CREDENTIALS[family]} for the service."
 
     assert find_credentials(text) == [family]
+
+
+def test_eval_credentials_are_ten_families_each_detected() -> None:
+    """The credential eval proves nothing if its fakes stop matching."""
+    credentials = fake_credentials()
+    assert len({c.family for c in credentials}) == 10
+    for credential in credentials:
+        assert find_credentials(credential.text) == [credential.family]
+        assert credential.secret in credential.text
 
 
 @pytest.mark.parametrize(

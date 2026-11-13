@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from dreaming_workflow import cli, dream
-from dreaming_workflow.agents import FailureReason, OrganizerStatus
+from dreaming_workflow.agents import FailureReason, OrganizerResult, OrganizerStatus
 from dreaming_workflow.memory import FormatRule, FormatViolation
 from dreaming_workflow.report import (
     FailedSession,
@@ -86,7 +86,11 @@ class RunSpy:
             analyzed=0,
             nothing_to_dream=True,
         )
-        return dream.RunResult(report=nothing, outcome=nothing.outcome)
+        return dream.RunResult(
+            report=nothing,
+            outcome=nothing.outcome,
+            organizer=OrganizerResult(OrganizerStatus.NOT_RUN),
+        )
 
 
 @pytest.fixture
