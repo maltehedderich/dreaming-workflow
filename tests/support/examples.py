@@ -6,6 +6,7 @@ from pathlib import Path
 
 from dreaming_workflow.memory.document import Citation
 from dreaming_workflow.sessions import Tool
+from tests.support.scripted_llm import FinalText, Step, create_file_call
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples" / "transcripts"
 CLAUDE_CODE_PROJECTS = EXAMPLES / "claude-code" / "projects"
@@ -86,3 +87,17 @@ SELECTED_EXAMPLES = (
         datetime(2026, 11, 7, 21, 21, tzinfo=UTC),
     ),
 )
+
+
+def one_fact_each() -> dict[tuple[str, int], list[Step]]:
+    """Analysis scripts that create `fact-<n>.md` for the n-th selected example."""
+    return {
+        (example.session_id, 1): [
+            create_file_call(
+                f"fact-{index}",
+                f"# Fact {index}\n\n- A fact. {example.citation()} [scope: Development]\n",
+            ),
+            FinalText("Recorded one fact."),
+        ]
+        for index, example in enumerate(SELECTED_EXAMPLES)
+    }

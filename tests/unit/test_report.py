@@ -9,13 +9,16 @@ from dreaming_workflow.agents import (
     AnalysisStatus,
     Failure,
     FailureReason,
+    OrganizerResult,
+    OrganizerStatus,
 )
 from dreaming_workflow.agents.budget import TokenUsage, UsageLedger
-from dreaming_workflow.memory import MemorySnapshot, Slug
+from dreaming_workflow.memory import FormatRule, FormatViolation, MemorySnapshot, Slug
 from dreaming_workflow.report import (
     FailedSession,
     FileChanges,
     IndexStats,
+    OrganizerSummary,
     Report,
     RunOutcome,
     build_report,
@@ -35,6 +38,7 @@ from dreaming_workflow.sessions import (
 
 AT = datetime(2026, 11, 2, 10, 0, tzinfo=UTC)
 EMPTY = MemorySnapshot(hashes={}, stubs=frozenset(), conflicts=frozenset())
+SUCCEEDED = OrganizerResult(OrganizerStatus.SUCCEEDED)
 
 
 def session(name: str, tool: Tool = Tool.CLAUDE_CODE) -> Session:
@@ -65,15 +69,22 @@ def report_for(
     results: list[AnalysisResult],
     start: MemorySnapshot = EMPTY,
     end: MemorySnapshot = EMPTY,
+    *,
+    organizer: OrganizerResult = SUCCEEDED,
+    violations: tuple[FormatViolation, ...] = (),
+    ledger: UsageLedger | None = None,
 ) -> Report:
     return build_report(
         run_id="20261110T213800Z",
         decisions=decisions,
         results=results,
+        organizer=organizer,
+        waiting_files=0,
         start=start,
         end=end,
         index=None,
-        ledger=UsageLedger(),
+        violations=violations,
+        ledger=ledger or UsageLedger(),
         backup_path=None,
     )
 
@@ -124,6 +135,37 @@ def test_any_failed_analysis_completes_with_failures(
     decisions: list[SelectionDecision] = [Selected(r.session, ()) for r in results]
 
     assert report_for(decisions, results).outcome is outcome
+
+
+def test_failed_organizer_completes_with_failures_and_keeps_its_reason() -> None:
+    organizer = OrganizerResult(
+        OrganizerStatus.FAILED, Failure(FailureReason.TIMEOUT), (Slug("a"),)
+    )
+
+    report = report_for(
+        [Selected(analyzed("a").session, ())], [analyzed("a")], organizer=organizer
+    )
+
+    assert report.organizer == OrganizerSummary(
+        OrganizerStatus.FAILED, FailureReason.TIMEOUT
+    )
+    assert report.outcome is RunOutcome.COMPLETED_WITH_FAILURES
+
+
+def test_organizer_that_did_not_run_is_not_a_failure() -> None:
+    report = report_for([], [], organizer=OrganizerResult(OrganizerStatus.NOT_RUN))
+
+    assert report.organizer == OrganizerSummary(OrganizerStatus.NOT_RUN)
+    assert report.outcome is RunOutcome.SUCCESS
+
+
+def test_any_violation_completes_with_failures() -> None:
+    violation = FormatViolation("notes.md", FormatRule.FRONTMATTER_MISSING)
+
+    report = report_for([], [], violations=(violation,))
+
+    assert report.violations == (violation,)
+    assert report.outcome is RunOutcome.COMPLETED_WITH_FAILURES
 
 
 def test_file_changes_from_two_snapshots() -> None:
@@ -182,16 +224,7 @@ def test_usage_counts_every_input_token() -> None:
         )
     )
 
-    report = build_report(
-        run_id="20261110T213800Z",
-        decisions=[],
-        results=[],
-        start=EMPTY,
-        end=EMPTY,
-        index=None,
-        ledger=ledger,
-        backup_path=None,
-    )
+    report = report_for([], [], ledger=ledger)
 
     assert report.usage.input_tokens == 62_000
     assert (report.usage.cache_read_tokens, report.usage.cache_write_tokens) == (

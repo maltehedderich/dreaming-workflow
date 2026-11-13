@@ -13,7 +13,13 @@ from tests.support.examples import (
     RUN_START,
     claude_code_example,
 )
-from tests.support.scripted_llm import CallTool, FinalText, ScriptedModels
+from tests.support.scripted_llm import (
+    CallTool,
+    FinalText,
+    ScriptedModels,
+    first_user_text,
+    organizer_done,
+)
 
 SLUG = "context7-connection"
 TYPED_PROMPT = "check you context7 connection, does it work?"
@@ -53,7 +59,8 @@ def test_one_session_becomes_one_memory_file(
                 ),
                 FinalText("Recorded one fact."),
             ]
-        }
+        },
+        organizer=organizer_done(),
     )
 
     exit_code = cli.main(
@@ -89,9 +96,7 @@ def test_one_session_becomes_one_memory_file(
     assert read_index == {"status": "ok", "text": ""}
     assert create_file is not None
     assert create_file["status"] == "ok"
-    first_user_message = "".join(
-        part.text or "" for part in model.requests[0].contents[0].parts or []
-    )
+    first_user_message = first_user_text(model)
     data = re.search(
         r"^=== BEGIN SESSION DATA (\w+) ===\n(.*)\n=== END SESSION DATA \1 ===$",
         first_user_message,
@@ -105,3 +110,8 @@ def test_one_session_becomes_one_memory_file(
     assert re.search(
         r"^  files +1 created, 0 changed, 0 retired$", report, re.MULTILINE
     )
+    [organizer] = models.organizer_runs
+    assert f"- {SLUG}\n" in first_user_text(organizer)
+    assert re.search(r"^Organizer +ran and succeeded$", report, re.MULTILINE)
+    assert re.search(r"^Waiting for the organizer +0 files$", report, re.MULTILINE)
+    assert re.search(r"^  format check +no violations$", report, re.MULTILINE)

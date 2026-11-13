@@ -1,6 +1,7 @@
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 
 from google.adk.agents import LlmAgent
+from google.adk.agents.invocation_context import LlmCallsLimitExceededError
 from google.adk.agents.run_config import RunConfig
 from google.adk.apps import App
 from google.adk.models import BaseLlm
@@ -12,6 +13,7 @@ from dreaming_workflow.agents.claude_model import (
     CONTEXT_CACHE,
     generate_content_config,
 )
+from dreaming_workflow.agents.results import AgentFailure, Failure, FailureReason
 from dreaming_workflow.agents.tools import ToolFunction
 
 APP_NAME = "dreaming-workflow"
@@ -48,3 +50,18 @@ async def run_agent(
             run_config=RunConfig(max_llm_calls=max_llm_calls),
         ):
             pass
+
+
+async def failure_of(run: Awaitable[None]) -> Failure | None:
+    """Await one agent invocation and return why it failed, or None if it succeeded."""
+    try:
+        await run
+    except AgentFailure as failure:
+        return failure.failure
+    except LlmCallsLimitExceededError:
+        return Failure(FailureReason.TURN_LIMIT)
+    # One invocation's unexpected error fails that invocation, not the run.
+    # Only the class name is kept: messages can quote session or memory content.
+    except Exception as error:  # noqa: BLE001
+        return Failure(FailureReason.INTERNAL_ERROR, type(error).__name__)
+    return None

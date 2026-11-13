@@ -17,10 +17,19 @@ from dreaming_workflow.agents import (
     FailureReason,
     Invocation,
     ModelFactory,
+    OrganizerResult,
+    OrganizerStatus,
     analyze_session,
+    organize,
+    select_input,
 )
 from dreaming_workflow.agents.budget import UsageLedger
-from dreaming_workflow.memory import MemoryStore, Refusal
+from dreaming_workflow.memory import (
+    FormatViolation,
+    MemoryStore,
+    Refusal,
+    check_format,
+)
 from dreaming_workflow.memory.backup import save_copy
 from dreaming_workflow.report import Report, RunOutcome, build_report, index_stats
 from dreaming_workflow.sessions import (
@@ -28,7 +37,7 @@ from dreaming_workflow.sessions import (
     SessionSources,
     discover_and_select,
 )
-from dreaming_workflow.state import ensure_state_dir
+from dreaming_workflow.state import DreamRecord, ensure_state_dir
 
 GROUP_SIZE = 20
 
@@ -96,6 +105,30 @@ def _progress_line(result: AnalysisResult) -> str:
     return f"  failed    {name} ({reason})"
 
 
+async def _organize(
+    store: MemoryStore,
+    record: DreamRecord,
+    analyzed_any: bool,
+    model_factory: ModelFactory,
+    ledger: UsageLedger,
+    progress: Progress,
+) -> OrganizerResult:
+    """Run the organizer if an analysis succeeded or files are waiting for it.
+
+    Received files stop waiting only when the pass succeeds.
+    """
+    violations = check_format(store.memory_dir)
+    organizer_input = select_input(record.waiting_files, violations, store)
+    record.stop_waiting(organizer_input.gone)
+    if not analyzed_any and not record.waiting_files:
+        return OrganizerResult(OrganizerStatus.NOT_RUN)
+    progress(f"Organizing {_plural(len(organizer_input.received), 'memory file')}")
+    result = await organize(organizer_input, violations, store, model_factory, ledger)
+    if result.status is OrganizerStatus.SUCCEEDED:
+        record.stop_waiting(result.received)
+    return result
+
+
 async def run(
     options: RunOptions,
     *,
@@ -103,7 +136,12 @@ async def run(
     model_factory: ModelFactory,
     progress: Progress = _to_stderr,
 ) -> RunResult:
+    """Analyze the selected sessions, organize memory, and check its format.
+
+    Raises `RecordError` before changing anything if the dream record can't be read.
+    """
     run_id = run_id_for(now)
+    record = DreamRecord.load(options.memory_dir)
     sources = SessionSources(
         claude_code_dir=options.claude_code_dir,
         codex_dir=options.codex_dir,
@@ -124,10 +162,43 @@ async def run(
         backup_path = save_copy(options.memory_dir, backups, run_id)
         progress(f"Saved a copy of memory to {backup_path}")
 
-    store = MemoryStore(options.memory_dir, before_first_write=save_pre_run_copy)
+    store = MemoryStore(
+        options.memory_dir,
+        before_first_write=save_pre_run_copy,
+        on_analysis_write=record.mark_waiting,
+    )
     start = store.snapshot()
     ledger = UsageLedger()
     factory = _StopAfterAuthenticationFailure(model_factory)
+
+    def report_for(
+        results: list[AnalysisResult],
+        organizer: OrganizerResult,
+        violations: list[FormatViolation],
+        *,
+        nothing_to_dream: bool = False,
+    ) -> Report:
+        index_text = store.read_index()
+        return build_report(
+            run_id=run_id,
+            decisions=decisions,
+            results=results,
+            organizer=organizer,
+            waiting_files=len(record.waiting_files),
+            start=start,
+            end=store.snapshot(),
+            index=None if isinstance(index_text, Refusal) else index_stats(index_text),
+            violations=violations,
+            ledger=ledger,
+            backup_path=backup_path,
+            nothing_to_dream=nothing_to_dream,
+        )
+
+    if not selected and not record.waiting_files:
+        report = report_for(
+            [], OrganizerResult(OrganizerStatus.NOT_RUN), [], nothing_to_dream=True
+        )
+        return RunResult(report=report, outcome=report.outcome)
 
     async def analyze(decision: Selected) -> AnalysisResult:
         result = await analyze_session(
@@ -149,15 +220,14 @@ async def run(
         )
         results.extend(await asyncio.gather(*(analyze(d) for d in group)))
 
-    index_text = store.read_index()
-    report = build_report(
-        run_id=run_id,
-        decisions=decisions,
-        results=results,
-        start=start,
-        end=store.snapshot(),
-        index=None if isinstance(index_text, Refusal) else index_stats(index_text),
-        ledger=ledger,
-        backup_path=backup_path,
+    organizer = await _organize(
+        store,
+        record,
+        any(r.status is AnalysisStatus.ANALYZED for r in results),
+        factory,
+        ledger,
+        progress,
     )
+    progress("Checking memory format")
+    report = report_for(results, organizer, check_format(options.memory_dir))
     return RunResult(report=report, outcome=report.outcome)

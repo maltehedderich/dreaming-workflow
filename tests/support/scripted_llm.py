@@ -138,6 +138,23 @@ class ScriptedModels:
         self.created.append((invocation, llm))
         return llm
 
+    @property
+    def analyses_created(self) -> list[Invocation]:
+        """Analysis invocations in the order they started."""
+        return [
+            invocation
+            for invocation, _ in self.created
+            if invocation.role is AgentRole.ANALYSIS
+        ]
+
+    @property
+    def organizer_runs(self) -> list[ScriptedLlm]:
+        return [
+            llm
+            for invocation, llm in self.created
+            if invocation.role is AgentRole.ORGANIZER
+        ]
+
     def model_for(self, session_id: str, part_index: int = 1) -> ScriptedLlm:
         for invocation, llm in self.created:
             if (
@@ -146,6 +163,15 @@ class ScriptedModels:
             ):
                 return llm
         raise AssertionError(f"session {session_id} part {part_index} never ran")
+
+
+def organizer_done() -> list[Step]:
+    """An organizer script that finds memory in order and changes nothing."""
+    return [FinalText("Memory is in order.")]
+
+
+def first_user_text(llm: ScriptedLlm) -> str:
+    return "".join(part.text or "" for part in llm.requests[0].contents[0].parts or [])
 
 
 def create_file_call(

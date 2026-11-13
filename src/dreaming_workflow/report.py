@@ -7,9 +7,15 @@ from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 
-from dreaming_workflow.agents import AnalysisResult, AnalysisStatus, FailureReason
+from dreaming_workflow.agents import (
+    AnalysisResult,
+    AnalysisStatus,
+    FailureReason,
+    OrganizerResult,
+    OrganizerStatus,
+)
 from dreaming_workflow.agents.budget import UsageLedger
-from dreaming_workflow.memory import MemorySnapshot
+from dreaming_workflow.memory import FormatViolation, MemorySnapshot
 from dreaming_workflow.memory.index import IndexParseError, parse_index
 from dreaming_workflow.sessions import (
     Selected,
@@ -41,6 +47,13 @@ class FailedSession:
     tool: Tool
     session_id: str
     reason: FailureReason
+
+
+@dataclass(frozen=True)
+class OrganizerSummary:
+    status: OrganizerStatus
+    # Set when the organizer failed.
+    failure: FailureReason | None = None
 
 
 @dataclass(frozen=True)
@@ -78,13 +91,19 @@ class Report:
     analyzed: int
     analyzed_in_parts: int
     failed: tuple[FailedSession, ...]
+    organizer: OrganizerSummary
+    # Files still waiting for the organizer after the run.
+    waiting_files: int
     # None when _index.md can't be parsed.
     index: IndexStats | None
     files: FileChanges
     conflicts_added: int
+    violations: tuple[FormatViolation, ...]
     usage: Usage
     # None when the run wrote nothing, so no copy was made.
     backup_path: Path | None
+    # The run stopped after selection: nothing was selected and nothing waited.
+    nothing_to_dream: bool = False
 
     @property
     def skipped(self) -> int:
@@ -92,7 +111,13 @@ class Report:
 
     @property
     def outcome(self) -> RunOutcome:
-        return RunOutcome.COMPLETED_WITH_FAILURES if self.failed else RunOutcome.SUCCESS
+        if (
+            self.failed
+            or self.organizer.status is OrganizerStatus.FAILED
+            or self.violations
+        ):
+            return RunOutcome.COMPLETED_WITH_FAILURES
+        return RunOutcome.SUCCESS
 
 
 def index_stats(index_text: str) -> IndexStats | None:
@@ -134,11 +159,15 @@ def build_report(
     run_id: str,
     decisions: Sequence[SelectionDecision],
     results: Sequence[AnalysisResult],
+    organizer: OrganizerResult,
+    waiting_files: int,
     start: MemorySnapshot,
     end: MemorySnapshot,
     index: IndexStats | None,
+    violations: Sequence[FormatViolation],
     ledger: UsageLedger,
     backup_path: Path | None,
+    nothing_to_dream: bool = False,
 ) -> Report:
     skip_counts = Counter(d.reason for d in decisions if isinstance(d, Skipped))
     analyzed = [r for r in results if r.status is AnalysisStatus.ANALYZED]
@@ -159,9 +188,16 @@ def build_report(
         analyzed=len(analyzed),
         analyzed_in_parts=sum(r.parts_run > 1 for r in analyzed),
         failed=failed,
+        organizer=OrganizerSummary(
+            organizer.status,
+            None if organizer.failure is None else organizer.failure.reason,
+        ),
+        waiting_files=waiting_files,
         index=index,
         files=file_changes(start, end),
         conflicts_added=len(end.conflicts - start.conflicts),
+        violations=tuple(violations),
         usage=usage_of(ledger),
         backup_path=backup_path,
+        nothing_to_dream=nothing_to_dream,
     )

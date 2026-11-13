@@ -74,7 +74,26 @@ def test_forbidden_writes_are_refused(tmp_path: Path) -> None:
             {"slug": "notes", "old_text": SEEDED, "new_text": "MOVED TO [[other]]\n"},
         ),
     ]
-    models = ScriptedModels(analyses={(SESSION_ID, 1): [*attempts, FinalText("Done.")]})
+    organizer_attempts = [
+        CallTool("append_to_file", {"slug": "linked", "text": "- More notes.\n"}),
+        CallTool("append_to_file", {"slug": "notes", "text": f"- Key: {key}\n"}),
+        # No memory file holds this citation, so the organizer can't add it.
+        CallTool("append_to_file", {"slug": "notes", "text": fact}),
+        CallTool("retire_file", {"slug": "notes", "into": "../outside"}),
+    ]
+    list_notes = CallTool(
+        "set_index_entry",
+        {
+            "slug": "notes",
+            "domain": "Personal",
+            "subdomain": None,
+            "sentence": "Notes.",
+        },
+    )
+    models = ScriptedModels(
+        analyses={(SESSION_ID, 1): [*attempts, FinalText("Done.")]},
+        organizer=[*organizer_attempts, list_notes, FinalText("Done.")],
+    )
 
     exit_code = cli.main(
         [
@@ -95,10 +114,20 @@ def test_forbidden_writes_are_refused(tmp_path: Path) -> None:
     for result in results:
         assert result is not None
         assert result["status"] == "refused"
+    [organizer] = models.organizer_runs
+    organizer_results = [result.response for result in organizer.tool_results]
+    assert [result and result["status"] for result in organizer_results] == [
+        *["refused"] * len(organizer_attempts),
+        "ok",
+    ]
     assert hashes(sentinel) == sentinel_before
     assert session_file.read_bytes() == session_before
     assert not (tmp_path / "outside.md").exists()
-    assert sorted(path.name for path in memory.iterdir()) == ["linked.md", "notes.md"]
+    assert sorted(path.name for path in memory.iterdir()) == [
+        "_index.md",
+        "linked.md",
+        "notes.md",
+    ]
     assert (memory / "notes.md").read_text() == SEEDED
     for path in memory.iterdir():
         if not path.is_symlink():

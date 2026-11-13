@@ -15,6 +15,7 @@ from tests.support.scripted_llm import (
     Signal,
     WaitFor,
     create_file_call,
+    organizer_done,
 )
 from tests.support.sessions import ClaudeCodeSession
 
@@ -65,7 +66,8 @@ def test_both_sessions_facts_survive_interleaved_writes(tmp_path: Path) -> None:
                 Signal(appended),
                 FinalText("Recorded the pin."),
             ],
-        }
+        },
+        organizer=organizer_done(),
     )
     memory = tmp_path / "memory"
 

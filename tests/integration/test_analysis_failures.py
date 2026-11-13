@@ -8,7 +8,13 @@ from pathlib import Path
 import pytest
 
 from dreaming_workflow import cli, dream
-from dreaming_workflow.agents import AgentFailure, Failure, FailureReason, Invocation
+from dreaming_workflow.agents import (
+    AgentFailure,
+    AgentRole,
+    Failure,
+    FailureReason,
+    Invocation,
+)
 from dreaming_workflow.memory.document import Citation
 from dreaming_workflow.sessions import Tool
 from tests.conftest import ExampleSessions
@@ -19,6 +25,7 @@ from tests.support.scripted_llm import (
     ScriptedModels,
     Step,
     create_file_call,
+    organizer_done,
 )
 from tests.support.sessions import ClaudeCodeSession, large_claude_code_session
 
@@ -78,11 +85,12 @@ def test_one_failed_session_does_not_stop_the_others(
         tmp_path / "memory",
         example_sessions.claude_code,
         example_sessions.codex,
-        ScriptedModels(analyses=analyses),
+        ScriptedModels(analyses=analyses, organizer=organizer_done()),
     )
 
     report = capsys.readouterr().out
     assert exit_code == 1
+    assert re.search(r"^Organizer +ran and succeeded$", report, re.MULTILINE)
     assert re.search(r"^  analyzed +4  ", report, re.MULTILINE)
     assert re.search(r"^  failed +1$", report, re.MULTILINE)
     assert f"\n  failed  codex {PASSWORD_LIMIT}  rate-limited\n" in report
@@ -97,7 +105,7 @@ def test_authentication_failure_stops_further_invocations(
         (session_id, 1): [FinalText("Nothing to record.")] for session_id in ids[:20]
     }
     analyses[(ids[0], 1)] = [fail(FailureReason.AUTHENTICATION_FAILED)]
-    models = ScriptedModels(analyses=analyses)
+    models = ScriptedModels(analyses=analyses, organizer=organizer_done())
 
     exit_code = run_cli(
         tmp_path / "memory", tmp_path / "claude", tmp_path / "codex", models
@@ -105,8 +113,14 @@ def test_authentication_failure_stops_further_invocations(
 
     report = capsys.readouterr().out
     assert exit_code == 1
-    # The 21st session is in the second group, which starts after the failure.
+    # The 21st session is in the second group, which starts after the failure,
+    # and the organizer comes after both groups.
     assert [invocation.session_id for invocation, _ in models.created] == ids[:20]
+    assert re.search(
+        r"^Organizer +failed \(authentication-failed\); memory was not organized$",
+        report,
+        re.MULTILINE,
+    )
     assert f"  failed  claude-code {ids[0]}  authentication-failed" in report
     assert f"  failed  claude-code {ids[20]}  authentication-failed" in report
     assert re.search(r"^  analyzed +19  ", report, re.MULTILINE)
@@ -137,7 +151,8 @@ def test_failed_part_stops_the_session_and_keeps_earlier_facts(
             ],
             (session_id, 2): [fail(FailureReason.OVERLOADED)],
             (session_id, 3): [FinalText("Nothing to record.")],
-        }
+        },
+        organizer=organizer_done(),
     )
     memory = tmp_path / "memory"
 
@@ -145,7 +160,10 @@ def test_failed_part_stops_the_session_and_keeps_earlier_facts(
 
     report = capsys.readouterr().out
     assert exit_code == 1
-    assert [invocation.part_index for invocation, _ in models.created] == [1, 2]
+    assert [invocation.part_index for invocation in models.analyses_created] == [
+        1,
+        2,
+    ]
     assert (memory / "part-one.md").is_file()
     assert f"  failed  claude-code {session_id}  overloaded" in report
     assert re.search(r"^  analyzed +0  ", report, re.MULTILINE)
@@ -158,6 +176,9 @@ def test_sessions_run_in_groups_of_20(tmp_path: Path) -> None:
     position = {session_id: index for index, session_id in enumerate(ids)}
 
     def factory(invocation: Invocation) -> ScriptedLlm:
+        if invocation.role is AgentRole.ORGANIZER:
+            events.append(("organize", ""))
+            return ScriptedLlm.with_steps(organizer_done())
         events.append(("start", invocation.session_id or ""))
         return ScriptedLlm.with_steps([FinalText("Nothing to record.")])
 
@@ -195,3 +216,4 @@ def test_sessions_run_in_groups_of_20(tmp_path: Path) -> None:
     assert sorted(position[s] for kind, s in events if kind == "start") == list(
         range(25)
     )
+    assert events[-1] == ("organize", "")

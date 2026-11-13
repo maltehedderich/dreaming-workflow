@@ -9,32 +9,19 @@ import pytest
 
 from dreaming_workflow import cli
 from tests.conftest import ExampleSessions
-from tests.support.examples import MAILARKIV_SUBTHREAD, RUN_START, SELECTED_EXAMPLES
-from tests.support.scripted_llm import (
-    FinalText,
-    ScriptedModels,
-    Step,
-    create_file_call,
+from tests.support.examples import (
+    MAILARKIV_SUBTHREAD,
+    RUN_START,
+    SELECTED_EXAMPLES,
+    one_fact_each,
 )
+from tests.support.scripted_llm import ScriptedModels, organizer_done
 
 
 def file_hashes(directory: Path) -> dict[Path, str]:
     return {
         path: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(directory.rglob("*.jsonl"))
-    }
-
-
-def one_fact_each() -> dict[tuple[str, int], list[Step]]:
-    return {
-        (example.session_id, 1): [
-            create_file_call(
-                f"fact-{index}",
-                f"# Fact {index}\n\n- A fact. {example.citation()} [scope: Development]\n",
-            ),
-            FinalText("Recorded one fact."),
-        ]
-        for index, example in enumerate(SELECTED_EXAMPLES)
     }
 
 
@@ -47,7 +34,7 @@ def test_dream_over_the_examples(
     sessions_before = file_hashes(example_sessions.claude_code) | file_hashes(
         example_sessions.codex
     )
-    models = ScriptedModels(analyses=one_fact_each())
+    models = ScriptedModels(analyses=one_fact_each(), organizer=organizer_done())
 
     exit_code = cli.main(
         [
@@ -77,7 +64,7 @@ def test_dream_over_the_examples(
     ):
         assert re.search(expected, report, re.MULTILINE), expected
 
-    invoked = [invocation.session_id for invocation, _ in models.created]
+    invoked = [invocation.session_id for invocation in models.analyses_created]
     assert invoked == [example.session_id for example in SELECTED_EXAMPLES]
     assert MAILARKIV_SUBTHREAD not in invoked
     for index in range(len(SELECTED_EXAMPLES)):

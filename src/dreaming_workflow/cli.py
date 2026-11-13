@@ -12,11 +12,12 @@ from dreaming_workflow.agents import (
     ClaudeModel,
     Invocation,
     ModelFactory,
+    OrganizerStatus,
     create_client,
 )
 from dreaming_workflow.agents.claude_model import MissingCredentials
-from dreaming_workflow.report import Report, RunOutcome
-from dreaming_workflow.state import state_dir
+from dreaming_workflow.report import OrganizerSummary, Report, RunOutcome
+from dreaming_workflow.state import RecordError, RecordProblem, state_dir
 
 # Third-party loggers can carry request bodies at DEBUG level, and those hold
 # session and memory content.
@@ -29,6 +30,10 @@ MISSING_CREDENTIALS = (
     "dream: no Claude API credentials found. Set ANTHROPIC_API_KEY, "
     "or run `ant auth login` to create a profile."
 )
+_RECORD_PROBLEMS = {
+    RecordProblem.UNKNOWN_VERSION: "it has a version this dream can't read",
+    RecordProblem.INVALID: "it isn't a valid dream record",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -138,9 +143,30 @@ def _sessions_block(report: Report) -> list[str]:
     return lines
 
 
+def _organizer_line(organizer: OrganizerSummary) -> str:
+    match organizer.status:
+        case OrganizerStatus.SUCCEEDED:
+            return "ran and succeeded"
+        case OrganizerStatus.FAILED:
+            reason = "unknown" if organizer.failure is None else organizer.failure.value
+            return f"failed ({reason}); memory was not organized"
+        case OrganizerStatus.NOT_RUN:
+            return "did not run"
+
+
+def _format_check_lines(report: Report) -> list[str]:
+    if not report.violations:
+        return [_row("format check", "no violations")]
+    count = _plural(len(report.violations), "violation", "violations")
+    return [
+        _row("format check", count),
+        *(f"  {v.file}  {v.rule.value}" for v in report.violations),
+    ]
+
+
 def render_report(report: Report) -> str:
     lines = [f"Dream report, run {report.run_id}", "", *_sessions_block(report)]
-    if report.selected == 0:
+    if report.nothing_to_dream:
         lines.extend(["", "Nothing to dream over."])
         return "\n".join(lines)
     index = (
@@ -159,6 +185,13 @@ def render_report(report: Report) -> str:
     lines.extend(
         [
             "",
+            _row("Organizer", _organizer_line(report.organizer), indent=""),
+            _row(
+                "Waiting for the organizer",
+                _plural(report.waiting_files, "file", "files"),
+                indent="",
+            ),
+            "",
             "Memory",
             _row("index", index),
             _row(
@@ -167,6 +200,7 @@ def render_report(report: Report) -> str:
                 f"{files.retired:,} retired",
             ),
             _row("conflicts added", f"{report.conflicts_added:,}"),
+            *_format_check_lines(report),
             "",
             "Usage",
             _row(
@@ -236,6 +270,13 @@ def main(
         result = asyncio.run(
             dream.run(options, now=started_at, model_factory=model_factory)
         )
+    except RecordError as error:
+        print(
+            f"dream: can't read the dream record {error.path}: "
+            f"{_RECORD_PROBLEMS[error.problem]}. Nothing was changed.",
+            file=sys.stderr,
+        )
+        return RunOutcome.NOT_STARTED.exit_code
     except KeyboardInterrupt:
         backups = state_dir(args.memory) / "backups"
         print(

@@ -6,15 +6,18 @@ from pathlib import Path
 import pytest
 
 from dreaming_workflow import cli, dream
-from dreaming_workflow.agents import FailureReason
+from dreaming_workflow.agents import FailureReason, OrganizerStatus
+from dreaming_workflow.memory import FormatRule, FormatViolation
 from dreaming_workflow.report import (
     FailedSession,
     FileChanges,
     IndexStats,
+    OrganizerSummary,
     Report,
     Usage,
 )
 from dreaming_workflow.sessions import SkipReason, Tool
+from dreaming_workflow.state import state_dir
 from tests.support.examples import PASSWORD_LIMIT, RUN_START
 from tests.support.scripted_llm import ScriptedModels
 
@@ -31,9 +34,12 @@ REPORT = Report(
     analyzed=5,
     analyzed_in_parts=0,
     failed=(),
+    organizer=OrganizerSummary(OrganizerStatus.SUCCEEDED),
+    waiting_files=0,
     index=IndexStats(entries=9, domains=2, subdomains=1),
     files=FileChanges(created=7, changed=1, retired=0),
     conflicts_added=0,
+    violations=(),
     usage=Usage(
         input_tokens=1_234_567,
         cache_read_tokens=1_000_000,
@@ -59,7 +65,14 @@ class RunSpy:
         model_factory: object,
     ) -> dream.RunResult:
         self.options.append(options)
-        nothing = replace(REPORT, found=0, selected=0, skipped_by_reason=(), analyzed=0)
+        nothing = replace(
+            REPORT,
+            found=0,
+            selected=0,
+            skipped_by_reason=(),
+            analyzed=0,
+            nothing_to_dream=True,
+        )
         return dream.RunResult(report=nothing, outcome=nothing.outcome)
 
 
@@ -167,10 +180,14 @@ def test_report_matches_the_contract_layout() -> None:
         "  analyzed                  5  (in more than one part: 0)",
         "  failed                    0",
         "",
+        "Organizer                   ran and succeeded",
+        "Waiting for the organizer   0 files",
+        "",
         "Memory",
         "  index                     9 entries, 2 domains, 1 subdomain",
         "  files                     7 created, 1 changed, 0 retired",
         "  conflicts added           0",
+        "  format check              no violations",
         "",
         "Usage",
         "  tokens                    1,234,567 input (1,000,000 cache read, 120,000 cache write), 45,678 output",
@@ -198,10 +215,86 @@ def test_report_lists_failed_sessions_and_a_missing_copy() -> None:
     assert lines[-1] == "Pre-run copy                none (memory unchanged)"
 
 
-def test_report_with_nothing_selected_stops_after_sessions() -> None:
-    nothing = replace(REPORT, found=1, selected=0, analyzed=0, backup_path=None)
+def test_report_with_nothing_to_dream_stops_after_sessions() -> None:
+    nothing = replace(
+        REPORT,
+        found=1,
+        selected=0,
+        analyzed=0,
+        organizer=OrganizerSummary(OrganizerStatus.NOT_RUN),
+        backup_path=None,
+        nothing_to_dream=True,
+    )
 
     assert cli.render_report(nothing).splitlines()[-2:] == [
         "",
         "Nothing to dream over.",
     ]
+
+
+def test_report_with_nothing_selected_but_files_waiting_is_complete() -> None:
+    organizer_only = replace(REPORT, found=0, selected=0, analyzed=0, waiting_files=1)
+
+    lines = cli.render_report(organizer_only).splitlines()
+
+    assert "Organizer                   ran and succeeded" in lines
+    assert "Waiting for the organizer   1 file" in lines
+    assert "Nothing to dream over." not in lines
+
+
+@pytest.mark.parametrize(
+    ("organizer", "line"),
+    [
+        (
+            OrganizerSummary(OrganizerStatus.FAILED, FailureReason.TIMEOUT),
+            "Organizer                   failed (timeout); memory was not organized",
+        ),
+        (
+            OrganizerSummary(OrganizerStatus.NOT_RUN),
+            "Organizer                   did not run",
+        ),
+    ],
+)
+def test_report_says_when_the_organizer_failed_or_did_not_run(
+    organizer: OrganizerSummary, line: str
+) -> None:
+    lines = cli.render_report(replace(REPORT, organizer=organizer, waiting_files=2))
+
+    assert f"\n{line}\nWaiting for the organizer   2 files\n" in lines
+
+
+def test_report_lists_violations_by_file_and_rule() -> None:
+    violations = (
+        FormatViolation("_index.md", FormatRule.INDEX_HEADING_EMPTY),
+        FormatViolation("notes.md", FormatRule.FRONTMATTER_MISSING),
+    )
+
+    lines = cli.render_report(replace(REPORT, violations=violations)).splitlines()
+
+    start = lines.index("  format check              2 violations")
+    assert lines[start + 1 : start + 4] == [
+        "  _index.md  index-heading-empty",
+        "  notes.md  frontmatter-missing",
+        "",
+    ]
+
+
+def test_unreadable_record_means_not_started(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record = state_dir(tmp_path / "memory") / "record.json"
+    record.parent.mkdir(parents=True)
+    record.write_text('{"version": 99}')
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    exit_code = main(
+        tmp_path, "--claude-code-dir", str(empty), "--codex-dir", str(empty)
+    )
+
+    assert exit_code == 2
+    assert capsys.readouterr().err == (
+        f"dream: can't read the dream record {record}: it has a version this dream "
+        "can't read. Nothing was changed.\n"
+    )
+    assert not (tmp_path / "memory").exists()

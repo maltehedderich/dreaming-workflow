@@ -17,6 +17,7 @@ from tests.support.scripted_llm import (
     ScriptedModels,
     Step,
     create_file_call,
+    organizer_done,
 )
 from tests.support.sessions import large_claude_code_session
 
@@ -57,7 +58,7 @@ def test_a_long_session_runs_as_seven_parts_in_order(
     }
     for part_index in range(3, 8):
         analyses[(SESSION_ID, part_index)] = [FinalText("Nothing new.")]
-    models = ScriptedModels(analyses=analyses)
+    models = ScriptedModels(analyses=analyses, organizer=organizer_done())
 
     exit_code = cli.main(
         [
@@ -74,7 +75,7 @@ def test_a_long_session_runs_as_seven_parts_in_order(
 
     report = capsys.readouterr().out
     assert exit_code == 0
-    assert [invocation.part_index for invocation, _ in models.created] == list(
+    assert [invocation.part_index for invocation in models.analyses_created] == list(
         range(1, 8)
     )
     for part_index in range(1, 8):

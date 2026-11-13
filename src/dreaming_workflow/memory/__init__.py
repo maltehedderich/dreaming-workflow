@@ -1,4 +1,5 @@
-from dreaming_workflow.memory.document import Slug
+from dreaming_workflow.memory.check import FormatRule, FormatViolation, check_format
+from dreaming_workflow.memory.document import Slug, parse_slug
 from dreaming_workflow.memory.store import (
     FileLines,
     MemorySnapshot,
@@ -11,6 +12,8 @@ from dreaming_workflow.memory.store import (
 
 __all__ = [
     "FileLines",
+    "FormatRule",
+    "FormatViolation",
     "MemorySnapshot",
     "MemoryStore",
     "Refusal",
@@ -18,4 +21,6 @@ __all__ = [
     "SearchResult",
     "Slug",
     "Writer",
+    "check_format",
+    "parse_slug",
 ]

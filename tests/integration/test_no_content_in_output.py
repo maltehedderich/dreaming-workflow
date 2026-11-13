@@ -48,7 +48,20 @@ def test_content_stays_out_of_every_output(
                 ),
                 FinalText(f"Nothing recorded about {canary}."),
             ]
-        }
+        },
+        organizer=[
+            CallTool("read_file", {"slug": "notes"}),
+            CallTool(
+                "set_index_entry",
+                {
+                    "slug": "notes",
+                    "domain": "Personal",
+                    "subdomain": None,
+                    "sentence": "Notes.",
+                },
+            ),
+            FinalText(f"Listed the note about {canary}."),
+        ],
     )
     caplog.set_level(logging.DEBUG)
 
@@ -69,6 +82,12 @@ def test_content_stays_out_of_every_output(
     assert exit_code == 0
     results = [result.response for result in models.model_for(SESSION_ID).tool_results]
     assert [result and result["status"] for result in results] == ["ok", "refused"]
+    [organizer] = models.organizer_runs
+    organizer_results = [result.response for result in organizer.tool_results]
+    assert [result and result["status"] for result in organizer_results] == [
+        "ok",
+        "ok",
+    ]
     assert canary not in captured.out
     assert canary not in captured.err
     for record in caplog.records:

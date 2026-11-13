@@ -47,3 +47,22 @@ class AnalysisResult:
     failure: Failure | None
     parts_run: int
     slugs_written: frozenset[Slug]
+
+
+class OrganizerStatus(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    NOT_RUN = "not-run"
+
+
+@dataclass(frozen=True)
+class OrganizerResult:
+    status: OrganizerStatus
+    failure: Failure | None = None
+    received: tuple[Slug, ...] = ()
+    # Slugs whose content `read_file` returned. Kept for tests; never printed.
+    slugs_read: frozenset[Slug] = frozenset()
+
+    @property
+    def ran(self) -> bool:
+        return self.status is not OrganizerStatus.NOT_RUN
