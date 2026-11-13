@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-10
 
-**Status**: Draft
+**Status**: Implemented. Three by-hand runs against the real Claude API are still open in [tasks.md](tasks.md): T036, T115, and T118.
 
 **Input**: User description: "take @README.md to get started with the specification, you can find examples for the session logs in the repo"
 

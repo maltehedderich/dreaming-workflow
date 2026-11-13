@@ -2,7 +2,7 @@
 
 A Python command-line tool that turns past conversations and notes into a personal long-term memory. It reimplements Anthropic's cookbook [Dreaming with a dynamic workflow](https://platform.claude.com/cookbook/managed-agents-cma-dreaming-with-a-dynamic-workflow) on Google's [Agent Development Kit](https://adk.dev) (ADK), with Claude as the model.
 
-> **Status:** The first feature, dreaming over finished Claude Code and Codex sessions, is built ([spec](specs/001-dream-sessions/spec.md)). Features are specified and built one at a time with Spec Kit (see [Development](#development)).
+> **Status:** The first feature, dreaming over finished Claude Code and Codex sessions, is implemented ([spec](specs/001-dream-sessions/spec.md)), and `mise run check` covers it with unit, contract, and integration tests. Three by-hand runs against the real Claude API are still open in the [task list](specs/001-dream-sessions/tasks.md): the single-session smoke run (T036), the full eval run (T115), and the quickstart walkthrough (T118). Until they are recorded, how well the agents extract and organize facts is unmeasured. Features are specified and built one at a time with Spec Kit (see [Development](#development)).
 
 ## What the cookbook does
 
@@ -31,7 +31,10 @@ The cookbook relies on Managed Agents for the agent runtime, the memory store, t
 - ADK runs the agents in one Python process.
 - ADK's own `AnthropicLlm` sends every model call to the Claude API through the official Anthropic Python SDK (`anthropic`), converting between ADK's requests and replies and the Messages API. A thin subclass sets the model, sends thinking blocks with empty text back unchanged, and turns refusals and cut-off replies into failures.
 - Memory is a local directory in the format above.
-- The agents' file tools are Python functions. They read transcripts and can write only inside the memory directory.
+- The tool reads the session files itself and gives each analyzer a conversation view: the prompts the user typed, the assistant's replies, and the tool calls and results. Reasoning, system prompts, and injected instruction files are left out.
+- The agents' file tools are Python functions that read and write only inside the memory directory. No tool reads session files or runs commands.
+- A view over 40,000 estimated tokens is analyzed in consecutive parts, so no request passes 100,000 input tokens. A view over 400,000 is skipped as too large.
+- Code, not the prompts, enforces the safety rules: the tools refuse paths outside memory, credential-shaped strings, broken frontmatter, and edits that would drop a fact's last citation. After the organizer, a format check reports any file that breaks the memory format.
 
 Both agents run on Claude Sonnet 5.5, where the cookbook uses Claude Haiku 5.5. The analyzer's instructions say what memory is for and leave the choice of what to record to the model. Anthropic's [memory research](https://www.anthropic.com/research/components-of-agent-memory) found that this works better than fixed rules on stronger models.
 
@@ -41,7 +44,7 @@ Memory is organized by domain. The cookbook's index has `## <domain>` headings b
 
 ## Privacy
 
-Transcripts and memory files hold personal data. Keep them outside this repository, and use synthetic examples in tests and docs. The exception is a few real sessions with personal details replaced, kept in [examples/transcripts](examples/transcripts/README.md) for development. Each analyzer sends a whole transcript to the Anthropic API, so only feed in what you're willing to send there.
+Transcripts and memory files hold personal data. Keep them outside this repository, and use synthetic examples in tests and docs. The exception is a few real sessions with personal details replaced, kept in [examples/transcripts](examples/transcripts/README.md) for development. Each analysis sends a session's conversation view to the Claude API: what the user typed, the assistant's replies, and tool calls with their output. Only feed in what you're willing to send there.
 
 Two rules carry over from the cookbook's prompts:
 
@@ -52,6 +55,7 @@ Whatever lands in memory steers every later session that reads it.
 
 ## Requirements
 
+- macOS or Linux. Windows isn't supported.
 - Python 3.15 and [uv](https://docs.astral.sh/uv/)
 - Claude API access through `ANTHROPIC_API_KEY` or a profile from `ant auth login`
 
@@ -64,13 +68,15 @@ uv run dream --memory ~/memory --preview
 uv run dream --memory ~/memory
 ```
 
-`--memory` is the only required option. A run reads the Claude Code sessions in `~/.claude/projects` and the Codex sessions in `~/.codex/sessions` that were last active in the past 14 days and at least an hour ago. It analyzes each one, runs the organizer once, checks the memory format, and prints a report. A session that was already analyzed is skipped unless its file changed since.
+`--memory` is the only required option. A run reads the Claude Code sessions in `~/.claude/projects` and the Codex sessions in `~/.codex/sessions` that were last active in the past 14 days and at least an hour ago. It analyzes each one, runs the organizer once, checks the memory format, and prints a report. A session that was already analyzed is skipped unless its file changed since. Codex subthreads, Claude Code subagent transcripts, sessions without a conversation, and sessions over 400,000 estimated tokens are skipped too; the preview and the report give the reason for each.
+
+If the organizer fails, the files the analyses wrote wait in the run record, and the next run organizes them even when it finds no new sessions.
 
 - `--preview` lists the sessions a run would send, with estimated tokens, and why the others are skipped. It sends nothing, writes nothing, and needs no credentials.
 - `--spending-limit USD` caps the run's cost at list price; the default is US$10.00. Once the limit is reached, no more analysis requests go out. The organizer still runs over what the analyses wrote.
 - `--since DATE`, `--claude-code-dir DIR`, `--codex-dir DIR`, and `--session FILE` change which sessions are considered. `uv run dream --help` lists every option, and the [CLI contract](specs/001-dream-sessions/contracts/cli.md) gives the details.
 
-The exit status is 0 on success, 1 when an analysis, the organizer, or the format check failed, and 2 when the run didn't start and nothing was changed.
+The exit status is 0 on success, 1 when an analysis, the organizer, or the format check failed, 2 when the run didn't start and nothing was changed, and 130 when a signal interrupted it. After an interruption memory may be partly updated; the pre-run copy holds the state from before the run.
 
 ### Run state and pre-run copies
 

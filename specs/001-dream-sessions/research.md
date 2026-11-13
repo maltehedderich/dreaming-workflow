@@ -61,7 +61,7 @@ Credentials preflight: constructing `AsyncAnthropic()` runs the SDK's credential
 
 Accepted cost: ADK escapes non-ASCII characters in tool results (`ü` becomes `\u00fc`), so memory text in languages other than English costs a few more tokens than it would unescaped.
 
-**Alternatives considered**: Our own `BaseLlm` subclass with its own conversion (the earlier draft): more code to keep in step with ADK and the SDK, where ADK's class needs one fix. `LiteLlm` (adds the `litellm` dependency and doesn't resolve `ant auth login` profiles). Leaving `thinking` unset to get the model's default, omitted display (it would depend on a model default, and ADK has no way to request adaptive thinking with omitted display). Streaming responses (not needed: 16,000 output tokens at Haiku speed fits the 300-second timeout, and the SDK only requires streaming for much larger `max_tokens`). Disabling thinking (`{"type": "disabled"}` is accepted at effort `high` or below, but Anthropic's migration notes recommend lowering effort instead, and the round trip is testable).
+**Alternatives considered**: Our own `BaseLlm` subclass with its own conversion (the earlier draft): more code to keep in step with ADK and the SDK, where ADK's class needs one fix. `LiteLlm` (adds the `litellm` dependency and doesn't resolve `ant auth login` profiles). Leaving `thinking` unset to get the model's default, omitted display (it would depend on a model default, and ADK has no way to request adaptive thinking with omitted display). Streaming responses (not needed: 16,000 output tokens fit the 300-second timeout at Claude Haiku 5.5's speed, which the tool used first; this hasn't been measured on Claude Sonnet 5.5, and the SDK only requires streaming for much larger `max_tokens`). Disabling thinking (`{"type": "disabled"}` is accepted at effort `high` or below, but Anthropic's migration notes recommend lowering effort instead, and the round trip is testable).
 
 ## R4. Model, prices, and cost
 
@@ -74,7 +74,7 @@ cost     = input_tokens × in + cache_creation_input_tokens × $2.50
          + cache_read_input_tokens × $0.10 + output_tokens × out
 ```
 
-Thinking tokens are billed as output and are included in `output_tokens`. Prices live in one table in `agents/budget.py` with the date they were checked. Before release, the implementer checks them against Anthropic's live pricing page.
+Thinking tokens are billed as output and are included in `output_tokens`. Prices live in one table in `agents/budget.py` with the date they were checked. They were last checked against Anthropic's pricing page on 2026-11-13.
 
 **Rationale**: The spending limit (FR-033) is only as good as the price table. Using the API's reported counts makes the cost exact at list price.
 
